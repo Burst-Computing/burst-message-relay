@@ -1,0 +1,32 @@
+[package]
+name = "tcp-version"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = {version = "1", features = ["full"]}
+deadqueue = "0.2.4"
+log = "0.4"
+env_logger = "0.6"
+
+[[bin]]
+name = "server"
+path = "examples/server.rs"
+
+[[bin]]
+name = "sendrecv"
+path = "examples/sendrecv.rs"
+
+[[bin]]
+name = "broadcast"
+path = "examples/broadcast.rs"
+
+[[bin]]
+name = "test"
+path = "examples/test.rs"
+
+[[bin]]
+name = "send"
+path = "examples/send_refs.rs"
