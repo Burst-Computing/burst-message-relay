@@ -1,5 +1,5 @@
-use tcp_version::client::client::Client;
-use tcp_version::config::ClientConfig;
+use burst_message_relay::client::client::Client;
+use burst_message_relay::config::ClientConfig;
 
 #[tokio::main]
 pub async fn main() -> std::io::Result<()> {

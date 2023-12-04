@@ -1,4 +1,4 @@
-use tcp_version::{client::client::Client, config::ClientConfig};
+use burst_message_relay::{client::client::Client, config::ClientConfig};
 
 #[tokio::main]
 pub async fn main() -> std::io::Result<()> {

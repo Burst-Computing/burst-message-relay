@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Instant, SystemTime};
-use tcp_version::client::client::Client;
-use tcp_version::config::ClientConfig;
+use burst_message_relay::client::client::Client;
+use burst_message_relay::config::ClientConfig;
 
 const PAYLOAD: usize = 1024 * 1024 * 1; // 1 MB
 const REPEAT: u32 = 256;

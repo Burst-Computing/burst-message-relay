@@ -1,8 +1,8 @@
 use std::env;
 use std::error::Error;
 
-use tcp_version::config::ServerConfig;
-use tcp_version::server::server::Server;
+use burst_message_relay::config::ServerConfig;
+use burst_message_relay::server::server::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
