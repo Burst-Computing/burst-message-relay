@@ -74,6 +74,16 @@ impl Client {
         .await
     }
 
+    pub async fn broadcast_root_refs(&mut self, group_name: String, data: &[&[u8]]) -> u32 {
+        self.write_tcp_refs(
+            ClientOperation::BroadcastRoot,
+            None,
+            Some(group_name.as_bytes()),
+            data,
+        )
+        .await
+    }
+
     pub async fn broadcast(&mut self, group_name: String) -> Vec<u8> {
         self.read_tcp(
             ClientOperation::Broadcast,
