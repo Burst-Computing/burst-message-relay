@@ -177,6 +177,9 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                         let counter = bgroup_hashmap.get_mut(&group_id).unwrap();
                         let actual_counter = *counter;
                         *counter += 1;
+                        if *counter == hashmap_group.len() as u32 {
+                            *counter = 0;
+                        }
                         drop(bgroup_hashmap);
 
                         match hashmap_group.get(&actual_counter) {
