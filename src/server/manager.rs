@@ -63,17 +63,23 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::CreateBroadcastGroup(client_id, group_name, n_queues)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
-                let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
+                if broadcast_groups.contains_key(&group_name){
+                    debug!("Manager Thread: Broadcast Group is already registered");
+                } else {
+                    let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
                     HashMap::new();
 
-                for i in 0..n_queues {
-                    bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
+                    for i in 0..n_queues {
+                        bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
+                    }
+
+                    broadcast_groups.insert(group_name.clone(), bc_hashmap);
+                    let mut bgroup_hashmap = bgroup_counter.lock().await;
+                    bgroup_hashmap.insert(group_name, 0);
+                    drop(bgroup_hashmap);
                 }
 
-                broadcast_groups.insert(group_name.clone(), bc_hashmap);
-                let mut bgroup_hashmap = bgroup_counter.lock().await;
-                bgroup_hashmap.insert(group_name, 0);
-                drop(bgroup_hashmap);
+                
                 client_channel
                     .send(FromManager::CreateBroadcastGroupResponse(
                         ServerResponse::Accepted,
