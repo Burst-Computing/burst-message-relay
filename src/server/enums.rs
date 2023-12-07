@@ -10,7 +10,7 @@ use crate::server::message::Message;
 pub enum ToManager {
     Register(u32, Sender<FromManager>),
     InitQueues(u32, Vec<u32>),
-    CreateBroadcastGroup(u32, String, Vec<u32>),
+    CreateBroadcastGroup(u32, String, u32),
     SendRequest(u32, u32),
     ReceiveRequest(u32, u32),
     BroadcastRootRequest(u32, String),

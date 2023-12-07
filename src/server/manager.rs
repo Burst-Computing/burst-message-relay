@@ -60,47 +60,25 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                     .send(FromManager::InitQueuesResponse(ServerResponse::Accepted))
                     .await?;
             }
-            Some(ToManager::CreateBroadcastGroup(client_id, group_name, queues)) => {
+            Some(ToManager::CreateBroadcastGroup(client_id, group_name, n_queues)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
-                if queues_store.is_empty() {
-                    client_channel
-                        .send(FromManager::CreateBroadcastGroupResponse(
-                            ServerResponse::Denied,
-                        ))
-                        .await?;
-                } else {
-                    let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
-                        HashMap::new();
+                let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
+                    HashMap::new();
 
-                    let mut counter = 0;
-
-                    for queue in &queues {
-                        match queues_store.get(&queue) {
-                            Some(queue) => {
-                                bc_hashmap.insert(counter, queue.clone());
-                                counter += 1;
-                            }
-                            None => {
-                                client_channel
-                                    .send(FromManager::CreateBroadcastGroupResponse(
-                                        ServerResponse::Denied,
-                                    ))
-                                    .await?;
-                            }
-                        }
-                    }
-
-                    broadcast_groups.insert(group_name.clone(), bc_hashmap);
-                    let mut bgroup_hashmap = bgroup_counter.lock().await;
-                    bgroup_hashmap.insert(group_name, 0);
-                    drop(bgroup_hashmap);
-                    client_channel
-                        .send(FromManager::CreateBroadcastGroupResponse(
-                            ServerResponse::Accepted,
-                        ))
-                        .await?;
+                for i in 0..n_queues {
+                    bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
                 }
+
+                broadcast_groups.insert(group_name.clone(), bc_hashmap);
+                let mut bgroup_hashmap = bgroup_counter.lock().await;
+                bgroup_hashmap.insert(group_name, 0);
+                drop(bgroup_hashmap);
+                client_channel
+                    .send(FromManager::CreateBroadcastGroupResponse(
+                        ServerResponse::Accepted,
+                    ))
+                    .await?;
             }
             Some(ToManager::SendRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();

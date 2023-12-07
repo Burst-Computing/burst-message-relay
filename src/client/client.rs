@@ -35,16 +35,16 @@ impl Client {
     }
 
     pub async fn init_queues(&mut self, data: &[u32]) -> u32 {
-        self.init_operation(ClientOperation::InitQueue, None, None, data)
+        self.init_queues_operation(ClientOperation::InitQueue, None, None, data)
             .await
     }
 
-    pub async fn create_bc_group(&mut self, group_name: String, data: &[u32]) -> u32 {
-        self.init_operation(
+    pub async fn create_bc_group(&mut self, group_name: String, n_queues: u32) -> u32 {
+        self.create_bc_group_operation(
             ClientOperation::CreateBcGroup,
             None,
             Some(group_name.as_bytes()),
-            data,
+            n_queues,
         )
         .await
     }
@@ -131,7 +131,7 @@ impl Client {
         sv_code.into()
     }
 
-    async fn init_operation(
+    async fn init_queues_operation(
         &mut self,
         protocol: ClientOperation,
         group_id: Option<u32>,
@@ -155,6 +155,32 @@ impl Client {
             for slice in queues {
                 stream.write_u32(*slice).await.unwrap();
             }
+            stream.flush().await.unwrap();
+
+            response = stream.read_u32().await.unwrap();
+        }
+
+        response
+    }
+
+    async fn create_bc_group_operation(
+        &mut self,
+        protocol: ClientOperation,
+        group_id: Option<u32>,
+        group_name: Option<&[u8]>,
+        n_queues: u32,
+    ) -> u32 {
+        let mut response: u32 = 999999;
+
+        let stream_option = &mut self.tcp_stream;
+
+        let stream = stream_option.as_mut().unwrap();
+
+        if Self::identify_operation(stream, protocol, group_id, group_name).await
+            == ServerResponse::Accepted
+        {
+            // N_queues
+            stream.write_u32(n_queues).await.unwrap();
             stream.flush().await.unwrap();
 
             response = stream.read_u32().await.unwrap();

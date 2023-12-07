@@ -10,8 +10,7 @@ pub async fn main() -> std::io::Result<()> {
 
     println!("Init code: {:?}", code);
 
-    let queues = vec![0, 1];
-    let code = client.create_bc_group(String::from("0"), &queues).await;
+    let code = client.create_bc_group(String::from("0"), 2).await;
 
     println!("Broadcast Code: {:?}", code);
 
@@ -24,31 +23,37 @@ pub async fn main() -> std::io::Result<()> {
     client_2.connect().await;
 
     let task = tokio::spawn(async move {
-        let random_bytes = vec![1; 268435456 * 2];
 
-        let code = client_1
-            .broadcast_root(String::from("0"), &random_bytes)
-            .await;
+        for _ in 0..15 {
+            let random_bytes = vec![1; 268435456 * 2];
+            let d: &[&[u8]] = &[&[1, 2, 3, 4], &random_bytes];
 
-        println!("Thread 1: Broadcast_root code: {:?}", code);
+            let code = client_1
+                .broadcast_root_refs(String::from("0"), &d)
+                .await;
 
-        let buf = client_1.broadcast(String::from("0")).await;
+            println!("Thread 1: Broadcast_root code: {:?}", code);
 
-        println!("Thread 1: Broadcast data: {:?}", buf.len());
+            let buf = client_1.broadcast(String::from("0")).await;
+
+            println!("Thread 1: Broadcast data: {:?}", buf.len());
+        }
 
         client_1.close().await;
     });
 
     let task2 = tokio::spawn(async move {
-        let buf = client_2.broadcast(String::from("0")).await;
+        for _ in 0..15 {
+            let buf = client_2.broadcast(String::from("0")).await;
 
-        println!("Thread 2: Broadcast data: {:?}", buf.len());
+            println!("Thread 2: Broadcast data: {:?}", buf.len());
+        }
 
         client_2.close().await;
     });
 
     let _ = task.await;
-    let _ = task2.await;
+    let _ = task2.await; 
 
     Ok(())
 }
