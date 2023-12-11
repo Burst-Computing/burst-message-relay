@@ -14,8 +14,6 @@ use crate::protocol::{ClientOperation, ServerResponse};
 use crate::server::enums::{FromManager, ToManager};
 use crate::server::message::Message;
 
-type TaskQueue = deadqueue::unlimited::Queue<Message>;
-
 pub async fn process_task(
     client_id: u32,
     mut stream: TcpStream,
@@ -34,14 +32,10 @@ pub async fn process_task(
     let new_client = ToManager::Register(client_id, manager_sender.clone());
     send_to_manager.send(new_client).await?;
 
-    // Buffer to store messages
-    let message_buff: Arc<TaskQueue> = Arc::new(TaskQueue::new());
-
     let mut alive = protocol_from_manager(
         &mut receive_from_manager,
         client_id,
         &mut stream,
-        message_buff.clone(),
         None,
     )
     .await;
@@ -67,7 +61,6 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     operation_id,
-                    message_buff.clone(),
                     None,
                 )
                 .await;
@@ -85,7 +78,6 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     operation_id,
-                    message_buff.clone(),
                     group_name,
                 )
                 .await;
@@ -104,7 +96,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    message_buff.clone(),
                     Some(config.clone()),
                 )
                 .await;
@@ -123,7 +114,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    message_buff.clone(),
                     None,
                 )
                 .await;
@@ -143,7 +133,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    message_buff.clone(),
                     Some(config.clone()),
                 )
                 .await;
@@ -162,7 +151,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    message_buff.clone(),
                     None,
                 )
                 .await;
@@ -177,7 +165,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    message_buff.clone(),
                     None,
                 )
                 .await;
@@ -198,7 +185,6 @@ async fn init_operation(
     client_id: u32,
     stream: &mut TcpStream,
     operation_id: ClientOperation,
-    message_buff: Arc<TaskQueue>,
     group_name: Option<String>,
 ) -> bool {
     //Read from tcp
@@ -226,14 +212,13 @@ async fn init_operation(
     }
 
     //Read from Manager
-    protocol_from_manager(receiver, client_id, stream, message_buff, None).await
+    protocol_from_manager(receiver, client_id, stream, None).await
 }
 
 async fn protocol_from_manager(
     receiver: &mut Receiver<FromManager>,
     client_id: u32,
     stream: &mut TcpStream,
-    message_buff: Arc<TaskQueue>,
     config: Option<ServerConfig>,
 ) -> bool {
     match receiver.recv().await {
@@ -285,7 +270,6 @@ async fn protocol_from_manager(
                     ClientOperation::Send,
                     stream,
                     queue.unwrap().clone(),
-                    message_buff,
                 )
                 .await
                 .unwrap();
@@ -309,7 +293,6 @@ async fn protocol_from_manager(
                     ClientOperation::BroadcastRoot,
                     stream,
                     queue.unwrap(),
-                    message_buff,
                 )
                 .await
                 .unwrap();
@@ -458,31 +441,69 @@ async fn receive_operation(
     op_id: ClientOperation,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
-    message_buff: Arc<TaskQueue>,
 ) -> Result<(), Box<dyn Error>> {
+
+    let mut messages_same_sender: Vec<Message> = Vec::new();
+    let mut vec_chunk_id = 999;
+
+    let mut discarded_messages: Vec<Message> = Vec::new();
+
+    let mut start = false;
+    let mut sender = 0;
+    let mut chunk = 0;
+
+    let mut finish = false;
+
     loop {
-        let message = get_message(&queue, message_buff.clone()).await;
 
-        // Check message
-        if message.op_id == op_id {
-            // Send header
-            if message.chunk_id == 0 {
-                stream
-                    .write_all(&message.all_mess_len.to_be_bytes())
-                    .await?;
-                stream.flush().await.unwrap();
-            }
+        let message;
+        if chunk == vec_chunk_id && !messages_same_sender.is_empty() {
+            message = messages_same_sender.remove(0);
+            vec_chunk_id += 1;
+        } else {
+            message = queue.pop().await;
+        }
 
+        if !start {
+            sender = message.sender_id;
+
+            stream.write_all(&message.all_mess_len.to_be_bytes()).await?;
+            stream.flush().await.unwrap();
+
+            start = true;
+        }
+
+        if message.chunk_id == chunk && message.op_id == op_id && message.sender_id == sender {
             // Send data to Client
             stream.write_all(&message.bytes).await?;
             stream.flush().await.unwrap();
 
+            chunk += 1;
+
             if message.last_chunk {
-                break;
+                finish = true;
             }
+
+        } else if message.sender_id == sender {
+
+            if messages_same_sender.is_empty() {
+                vec_chunk_id = message.chunk_id;
+                messages_same_sender.push(message);
+            } else {
+                messages_same_sender.push(message);
+            }
+
         } else {
-            message_buff.push(message.clone());
+            discarded_messages.push(message);
         }
+
+        if finish {
+            break;
+        }
+    }
+
+    while !discarded_messages.is_empty() {
+        queue.push(discarded_messages.remove(0));
     }
 
     debug!(
@@ -499,17 +520,6 @@ async fn receive_operation(
     );
 
     Ok(())
-}
-
-async fn get_message(queue: &Arc<Queue<Message>>, message_buff: Arc<Queue<Message>>) -> Message {
-    tokio::select! {
-        message = queue.pop() => {
-            message
-        }
-        message = message_buff.pop() => {
-            message
-        }
-    }
 }
 
 async fn broadcast_root_operation(
