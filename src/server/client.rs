@@ -444,7 +444,7 @@ async fn receive_operation(
 ) -> Result<(), Box<dyn Error>> {
 
     let mut messages_same_sender: Vec<Message> = Vec::new();
-    let mut vec_chunk_id = 999;
+    let mut indexes_same_sender: Vec<u32> = Vec::new();
 
     let mut discarded_messages: Vec<Message> = Vec::new();
 
@@ -457,9 +457,18 @@ async fn receive_operation(
     loop {
 
         let message;
-        if chunk == vec_chunk_id && !messages_same_sender.is_empty() {
-            message = messages_same_sender.remove(0);
-            vec_chunk_id += 1;
+
+        if !indexes_same_sender.is_empty() {
+
+            match indexes_same_sender.iter().position(|&i| i == chunk) {
+                Some(index) => {
+                    indexes_same_sender.remove(index);
+                    message = messages_same_sender.remove(index);
+                }
+                None => {
+                    message = queue.pop().await;
+                }
+            }
         } else {
             message = queue.pop().await;
         }
@@ -487,9 +496,10 @@ async fn receive_operation(
         } else if message.sender_id == sender {
 
             if messages_same_sender.is_empty() {
-                vec_chunk_id = message.chunk_id;
+                indexes_same_sender.push(message.chunk_id);
                 messages_same_sender.push(message);
             } else {
+                indexes_same_sender.push(message.chunk_id);
                 messages_same_sender.push(message);
             }
 
