@@ -475,8 +475,6 @@ async fn receive_operation(
             message = queue.pop().await;
         }
 
-        println!("Message: {:?}", message);
-
         if !start {
             message_id = message.id;
 
