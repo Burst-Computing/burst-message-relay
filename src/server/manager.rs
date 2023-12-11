@@ -23,6 +23,10 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
     > = HashMap::new();
     let bgroup_counter: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
 
+    let send_counter: Mutex<u32> = Mutex::new(0);
+    let broadcast_counter: Mutex<u32> = Mutex::new(0);
+
+
     loop {
         match receiver.recv().await {
             Some(ToManager::Register(client_id, client_channel)) => {
@@ -91,16 +95,24 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
 
                 match queues_store.get(&queue_id) {
                     Some(queue) => {
+
+                        let mut send_id = send_counter.lock().await;
+
                         client_channel
                             .send(FromManager::SendResponse(
                                 ServerResponse::Accepted,
+                                *send_id,
                                 Some(queue.clone()),
                             ))
                             .await?;
+
+                        *send_id += 1;
+                        drop(send_id);
+
                     }
                     None => {
                         client_channel
-                            .send(FromManager::SendResponse(ServerResponse::Denied, None))
+                            .send(FromManager::SendResponse(ServerResponse::Denied, 0, None))
                             .await?;
                     }
                 }
@@ -135,17 +147,23 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                             all_queues.push(value.clone());
                         }
 
+                        let mut bc_id = broadcast_counter.lock().await;
                         client_channel
                             .send(FromManager::BroadcastRootResponse(
                                 ServerResponse::Accepted,
+                                *bc_id,
                                 Some(all_queues),
                             ))
                             .await?;
+
+                        *bc_id += 1;
+                        drop(bc_id);
                     }
                     None => {
                         client_channel
                             .send(FromManager::BroadcastRootResponse(
                                 ServerResponse::Denied,
+                                0,
                                 None,
                             ))
                             .await?;

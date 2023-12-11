@@ -246,14 +246,14 @@ async fn protocol_from_manager(
                 stream.flush().await.unwrap();
             }
         }
-        Some(FromManager::SendResponse(sv_code, queue)) => {
+        Some(FromManager::SendResponse(sv_code, id, queue)) => {
             if sv_code == ServerResponse::Denied {
                 debug!(
                     "Client {:?} - Main Thread: Destination Client queue not found",
                     client_id
                 );
             } else {
-                send_operation(client_id, stream, queue.unwrap(), config.unwrap())
+                send_operation(id, client_id, stream, queue.unwrap(), config.unwrap())
                     .await
                     .unwrap();
             }
@@ -275,11 +275,11 @@ async fn protocol_from_manager(
                 .unwrap();
             }
         }
-        Some(FromManager::BroadcastRootResponse(sv_code, list_queues)) => {
+        Some(FromManager::BroadcastRootResponse(sv_code, id, list_queues)) => {
             if sv_code == ServerResponse::Denied {
                 debug!("Client {:?} - Main Thread: Broadcast Root Error", client_id);
             } else {
-                broadcast_root_operation(client_id, stream, list_queues.unwrap(), config.unwrap())
+                broadcast_root_operation(id, client_id, stream, list_queues.unwrap(), config.unwrap())
                     .await
                     .unwrap();
             }
@@ -364,6 +364,7 @@ async fn identify_operation(
 }
 
 async fn send_operation(
+    id: u32,
     client_id: u32,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
@@ -391,6 +392,7 @@ async fn send_operation(
                 }
 
                 let message = Message::new(
+                    id,
                     client_id,
                     ClientOperation::Send,
                     chunk_id,
@@ -449,7 +451,7 @@ async fn receive_operation(
     let mut discarded_messages: Vec<Message> = Vec::new();
 
     let mut start = false;
-    let mut sender = 0;
+    let mut message_id = 0;
     let mut chunk = 0;
 
     let mut finish = false;
@@ -473,8 +475,10 @@ async fn receive_operation(
             message = queue.pop().await;
         }
 
+        println!("Message: {:?}", message);
+
         if !start {
-            sender = message.sender_id;
+            message_id = message.id;
 
             stream.write_all(&message.all_mess_len.to_be_bytes()).await?;
             stream.flush().await.unwrap();
@@ -482,7 +486,7 @@ async fn receive_operation(
             start = true;
         }
 
-        if message.chunk_id == chunk && message.op_id == op_id && message.sender_id == sender {
+        if message.chunk_id == chunk && message.op_id == op_id && message.id == message_id {
             // Send data to Client
             stream.write_all(&message.bytes).await?;
             stream.flush().await.unwrap();
@@ -493,7 +497,7 @@ async fn receive_operation(
                 finish = true;
             }
 
-        } else if message.sender_id == sender {
+        } else if message.id == message_id {
 
             if messages_same_sender.is_empty() {
                 indexes_same_sender.push(message.chunk_id);
@@ -533,6 +537,7 @@ async fn receive_operation(
 }
 
 async fn broadcast_root_operation(
+    id: u32,
     client_id: u32,
     stream: &mut TcpStream,
     list_queues: Vec<Arc<Queue<Message>>>,
@@ -560,6 +565,7 @@ async fn broadcast_root_operation(
                 }
 
                 let message = Message::new(
+                    id,
                     client_id,
                     ClientOperation::BroadcastRoot,
                     chunk_id,
