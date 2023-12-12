@@ -2,6 +2,7 @@ use deadqueue::unlimited::Queue;
 
 use log::debug;
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -13,6 +14,8 @@ use crate::config::ServerConfig;
 use crate::protocol::{ClientOperation, ServerResponse};
 use crate::server::enums::{FromManager, ToManager};
 use crate::server::message::Message;
+
+use tokio::sync::Mutex;
 
 pub async fn process_task(
     client_id: u32,
@@ -32,11 +35,14 @@ pub async fn process_task(
     let new_client = ToManager::Register(client_id, manager_sender.clone());
     send_to_manager.send(new_client).await?;
 
+    let hashmap_queues: Arc<Mutex<HashMap<u32, Vec<Message>>>> = Arc::new(Mutex::new(HashMap::new()));
+
     let mut alive = protocol_from_manager(
         &mut receive_from_manager,
         client_id,
         &mut stream,
         None,
+        None
     )
     .await;
 
@@ -97,6 +103,7 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     Some(config.clone()),
+                    None
                 )
                 .await;
             }
@@ -115,6 +122,7 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     None,
+                    Some(hashmap_queues.clone())
                 )
                 .await;
             }
@@ -134,6 +142,7 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     Some(config.clone()),
+                    None
                 )
                 .await;
             }
@@ -152,6 +161,7 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     None,
+                    Some(hashmap_queues.clone()),
                 )
                 .await;
             }
@@ -166,6 +176,7 @@ pub async fn process_task(
                     client_id,
                     &mut stream,
                     None,
+                    None
                 )
                 .await;
             }
@@ -212,7 +223,7 @@ async fn init_operation(
     }
 
     //Read from Manager
-    protocol_from_manager(receiver, client_id, stream, None).await
+    protocol_from_manager(receiver, client_id, stream, None, None).await
 }
 
 async fn protocol_from_manager(
@@ -220,6 +231,7 @@ async fn protocol_from_manager(
     client_id: u32,
     stream: &mut TcpStream,
     config: Option<ServerConfig>,
+    hashmap_queues: Option<Arc<Mutex<HashMap<u32, Vec<Message>>>>>,
 ) -> bool {
     match receiver.recv().await {
         Some(FromManager::Accept(sv_code)) => {
@@ -270,6 +282,7 @@ async fn protocol_from_manager(
                     ClientOperation::Send,
                     stream,
                     queue.unwrap().clone(),
+                    hashmap_queues.unwrap()
                 )
                 .await
                 .unwrap();
@@ -293,6 +306,7 @@ async fn protocol_from_manager(
                     ClientOperation::BroadcastRoot,
                     stream,
                     queue.unwrap(),
+                    hashmap_queues.unwrap()
                 )
                 .await
                 .unwrap();
@@ -443,12 +457,8 @@ async fn receive_operation(
     op_id: ClientOperation,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
+    hashmap_queues: Arc<Mutex<HashMap<u32, Vec<Message>>>>,
 ) -> Result<(), Box<dyn Error>> {
-
-    let mut messages_same_sender: Vec<Message> = Vec::new();
-    let mut indexes_same_sender: Vec<u32> = Vec::new();
-
-    let mut discarded_messages: Vec<Message> = Vec::new();
 
     let mut start = false;
     let mut message_id = 0;
@@ -456,21 +466,27 @@ async fn receive_operation(
 
     let mut finish = false;
 
+    let mut aux_queue = Vec::new();
+
+    let mut hashmap = hashmap_queues.lock().await;
+
     loop {
 
         let message;
 
-        if !indexes_same_sender.is_empty() {
+        if !hashmap.is_empty() {
 
-            match indexes_same_sender.iter().position(|&i| i == chunk) {
-                Some(index) => {
-                    indexes_same_sender.remove(index);
-                    message = messages_same_sender.remove(index);
-                }
-                None => {
-                    message = queue.pop().await;
-                }
+            if !start {
+                let (_, queue) = hashmap.clone().into_iter().next().unwrap();
+                aux_queue = queue;
             }
+
+            if !aux_queue.is_empty() {
+                message = aux_queue.remove(0);
+            } else {
+                message = queue.pop().await;
+            }
+
         } else {
             message = queue.pop().await;
         }
@@ -497,16 +513,18 @@ async fn receive_operation(
 
         } else if message.id == message_id {
 
-            if messages_same_sender.is_empty() {
-                indexes_same_sender.push(message.chunk_id);
-                messages_same_sender.push(message);
-            } else {
-                indexes_same_sender.push(message.chunk_id);
-                messages_same_sender.push(message);
-            }
+            aux_queue.push(message);
 
         } else {
-            discarded_messages.push(message);
+            if !hashmap.contains_key(&message.id) {
+                let mut new_queue = Vec::new();
+                let id = message.id;
+                new_queue.push(message);
+                hashmap.insert(id, new_queue);
+            } else {
+                let aux_queue = hashmap.get_mut(&message.id).unwrap();
+                aux_queue.push(message);
+            }
         }
 
         if finish {
@@ -514,9 +532,8 @@ async fn receive_operation(
         }
     }
 
-    while !discarded_messages.is_empty() {
-        queue.push(discarded_messages.remove(0));
-    }
+    hashmap.remove(&message_id);
+    drop(hashmap);
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
