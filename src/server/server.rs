@@ -3,7 +3,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 
-use crate::config::ServerConfig;
 use crate::server::client;
 use crate::server::enums::ToManager;
 use crate::server::manager;
@@ -11,18 +10,16 @@ use crate::server::manager;
 pub struct Server {
     tcp_socket: TcpListener,
     client_id: u32,
-    config: ServerConfig,
 }
 
 impl Server {
-    pub async fn new(addr: &str, config: ServerConfig) -> Server {
+    pub async fn new(addr: &str) -> Server {
         let tcp_addr = String::from(addr);
         let listener = Self::create_tcp(tcp_addr.clone());
 
         Server {
             tcp_socket: listener.await,
             client_id: 0,
-            config: config,
         }
     }
 
@@ -51,12 +48,11 @@ impl Server {
         match self.accept().await {
             Some(tcp_stream) => {
                 let id = self.client_id.clone();
-                let server_config = self.config.clone();
 
                 // Start Client thread
                 tokio::spawn(async move {
                     //println!("Client thread spawned");
-                    client::process_task(id, tcp_stream, manager_sender, server_config)
+                    client::process_task(id, tcp_stream, manager_sender)
                         .await
                         .expect("Client Connection Failed");
                 });

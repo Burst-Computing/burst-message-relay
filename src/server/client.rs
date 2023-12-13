@@ -9,7 +9,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use crate::config::ServerConfig;
 use crate::protocol::{ClientOperation, ServerResponse};
 use crate::server::enums::{FromManager, ToManager};
 use crate::server::message::Message;
@@ -18,7 +17,6 @@ pub async fn process_task(
     client_id: u32,
     mut stream: TcpStream,
     send_to_manager: Sender<ToManager>,
-    config: ServerConfig,
 ) -> Result<(), Box<dyn Error>> {
     debug!(
         "Client {:?} - Main thread: Start Client Connection",
@@ -33,7 +31,7 @@ pub async fn process_task(
     send_to_manager.send(new_client).await?;
 
     let mut alive =
-        protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None).await;
+        protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
 
     while alive {
         debug!("Client {:?} - Main thread: Checking Operation", client_id);
@@ -88,7 +86,7 @@ pub async fn process_task(
                 send_to_manager.send(send_request).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
                         .await;
             }
 
@@ -105,7 +103,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    Some(config.clone()),
                 )
                 .await;
             }
@@ -121,7 +118,7 @@ pub async fn process_task(
                 send_to_manager.send(receive_request).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
                         .await;
             }
 
@@ -138,7 +135,6 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    Some(config.clone()),
                 )
                 .await;
             }
@@ -149,7 +145,7 @@ pub async fn process_task(
                 send_to_manager.send(close_client).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
                         .await;
             }
 
@@ -195,14 +191,13 @@ async fn init_operation(
     }
 
     //Read from Manager
-    protocol_from_manager(receiver, client_id, stream, None).await
+    protocol_from_manager(receiver, client_id, stream).await
 }
 
 async fn protocol_from_manager(
     receiver: &mut Receiver<FromManager>,
     client_id: u32,
     stream: &mut TcpStream,
-    config: Option<ServerConfig>,
 ) -> bool {
     match receiver.recv().await {
         Some(FromManager::Accept(sv_code)) => {
@@ -253,7 +248,6 @@ async fn protocol_from_manager(
                     ClientOperation::Send,
                     stream,
                     queue.unwrap().clone(),
-                    config.unwrap(),
                 )
                 .await
                 .unwrap();
@@ -277,7 +271,6 @@ async fn protocol_from_manager(
                     ClientOperation::BroadcastRoot,
                     stream,
                     queue.unwrap(),
-                    config.unwrap(),
                 )
                 .await
                 .unwrap();
@@ -370,7 +363,6 @@ async fn send_operation(
                 total_bytes,
                 buffer,
             );
-
             queue.push(message);
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -405,7 +397,6 @@ async fn receive_operation(
     _op_id: ClientOperation,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
-    config: ServerConfig,
 ) -> Result<(), Box<dyn Error>> {
     let message = queue.pop().await;
 
@@ -414,35 +405,8 @@ async fn receive_operation(
     stream.flush().await.unwrap();
 
     // Send data to Client
-    let iterations = message.all_mess_len as usize / config.receive_buffer_capacity;
+    stream.write_all(&message.bytes).await.unwrap();
 
-    if iterations > 0 {
-        for i in 0..iterations {
-            let index = i as usize;
-
-            stream
-                .write_all(
-                    &message.bytes[config.receive_buffer_capacity * index
-                        ..config.receive_buffer_capacity * (index + 1)],
-                )
-                .await
-                .unwrap();
-            stream.flush().await.unwrap();
-        }
-
-        let iter = iterations as usize;
-        stream
-            .write_all(
-                &message.bytes
-                    [config.receive_buffer_capacity * iter..message.all_mess_len as usize],
-            )
-            .await
-            .unwrap();
-        stream.flush().await.unwrap();
-    } else {
-        stream.write_all(&message.bytes).await.unwrap();
-        stream.flush().await.unwrap();
-    }
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
@@ -509,7 +473,7 @@ async fn broadcast_root_operation(
         .write_u32(ServerResponse::Accepted as u32)
         .await
         .unwrap();
-    stream.flush().await.unwrap();
+    stream.flush().await.unwrap(); 
 
     Ok(())
 }
