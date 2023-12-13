@@ -2,7 +2,6 @@ use deadqueue::unlimited::Queue;
 
 use log::debug;
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -14,8 +13,6 @@ use crate::config::ServerConfig;
 use crate::protocol::{ClientOperation, ServerResponse};
 use crate::server::enums::{FromManager, ToManager};
 use crate::server::message::Message;
-
-use tokio::sync::Mutex;
 
 pub async fn process_task(
     client_id: u32,
@@ -35,16 +32,8 @@ pub async fn process_task(
     let new_client = ToManager::Register(client_id, manager_sender.clone());
     send_to_manager.send(new_client).await?;
 
-    let hashmap_queues: Arc<Mutex<HashMap<u32, Vec<Message>>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    let mut alive = protocol_from_manager(
-        &mut receive_from_manager,
-        client_id,
-        &mut stream,
-        None,
-        None
-    )
-    .await;
+    let mut alive =
+        protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None).await;
 
     while alive {
         debug!("Client {:?} - Main thread: Checking Operation", client_id);
@@ -98,14 +87,9 @@ pub async fn process_task(
                 let send_request = ToManager::SendRequest(client_id, queue_id.unwrap());
                 send_to_manager.send(send_request).await?;
 
-                alive = protocol_from_manager(
-                    &mut receive_from_manager,
-                    client_id,
-                    &mut stream,
-                    Some(config.clone()),
-                    None
-                )
-                .await;
+                alive =
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                        .await;
             }
 
             ClientOperation::Receive => {
@@ -121,8 +105,7 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    None,
-                    Some(hashmap_queues.clone())
+                    Some(config.clone()),
                 )
                 .await;
             }
@@ -137,14 +120,9 @@ pub async fn process_task(
                     ToManager::BroadcastRootRequest(client_id, group_name.unwrap());
                 send_to_manager.send(receive_request).await?;
 
-                alive = protocol_from_manager(
-                    &mut receive_from_manager,
-                    client_id,
-                    &mut stream,
-                    Some(config.clone()),
-                    None
-                )
-                .await;
+                alive =
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                        .await;
             }
 
             ClientOperation::Broadcast => {
@@ -160,8 +138,7 @@ pub async fn process_task(
                     &mut receive_from_manager,
                     client_id,
                     &mut stream,
-                    None,
-                    Some(hashmap_queues.clone()),
+                    Some(config.clone()),
                 )
                 .await;
             }
@@ -171,14 +148,9 @@ pub async fn process_task(
                 let close_client = ToManager::Close(client_id);
                 send_to_manager.send(close_client).await?;
 
-                alive = protocol_from_manager(
-                    &mut receive_from_manager,
-                    client_id,
-                    &mut stream,
-                    None,
-                    None
-                )
-                .await;
+                alive =
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream, None)
+                        .await;
             }
 
             ClientOperation::Error => {
@@ -223,7 +195,7 @@ async fn init_operation(
     }
 
     //Read from Manager
-    protocol_from_manager(receiver, client_id, stream, None, None).await
+    protocol_from_manager(receiver, client_id, stream, None).await
 }
 
 async fn protocol_from_manager(
@@ -231,7 +203,6 @@ async fn protocol_from_manager(
     client_id: u32,
     stream: &mut TcpStream,
     config: Option<ServerConfig>,
-    hashmap_queues: Option<Arc<Mutex<HashMap<u32, Vec<Message>>>>>,
 ) -> bool {
     match receiver.recv().await {
         Some(FromManager::Accept(sv_code)) => {
@@ -265,7 +236,7 @@ async fn protocol_from_manager(
                     client_id
                 );
             } else {
-                send_operation(id, client_id, stream, queue.unwrap(), config.unwrap())
+                send_operation(id, client_id, stream, queue.unwrap())
                     .await
                     .unwrap();
             }
@@ -282,7 +253,7 @@ async fn protocol_from_manager(
                     ClientOperation::Send,
                     stream,
                     queue.unwrap().clone(),
-                    hashmap_queues.unwrap()
+                    config.unwrap(),
                 )
                 .await
                 .unwrap();
@@ -292,7 +263,7 @@ async fn protocol_from_manager(
             if sv_code == ServerResponse::Denied {
                 debug!("Client {:?} - Main Thread: Broadcast Root Error", client_id);
             } else {
-                broadcast_root_operation(id, client_id, stream, list_queues.unwrap(), config.unwrap())
+                broadcast_root_operation(id, client_id, stream, list_queues.unwrap())
                     .await
                     .unwrap();
             }
@@ -306,7 +277,7 @@ async fn protocol_from_manager(
                     ClientOperation::BroadcastRoot,
                     stream,
                     queue.unwrap(),
-                    hashmap_queues.unwrap()
+                    config.unwrap(),
                 )
                 .await
                 .unwrap();
@@ -382,60 +353,37 @@ async fn send_operation(
     client_id: u32,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
-    config: ServerConfig,
 ) -> Result<(), Box<dyn Error>> {
-    let mut n_bytes_read = 0;
-    let mut chunk_id = 0;
-    let mut last_chunk = false;
-
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
 
-    loop {
-        let mut buffer = Vec::<u8>::with_capacity(config.send_buffer_capacity);
+    let mut buffer: Vec<u8> = vec![0; total_bytes as usize];
 
-        match stream.read_buf(&mut buffer).await {
-            Ok(0) => {
-                continue;
-            }
-            Ok(n) => {
-                n_bytes_read += n;
+    match stream.read_exact(&mut buffer).await {
+        Ok(_) => {
+            let message = Message::new(
+                id,
+                client_id,
+                ClientOperation::Send,
+                0,
+                true,
+                total_bytes,
+                buffer,
+            );
 
-                if n_bytes_read == total_bytes.try_into().unwrap() {
-                    last_chunk = true;
-                }
-
-                let message = Message::new(
-                    id,
-                    client_id,
-                    ClientOperation::Send,
-                    chunk_id,
-                    last_chunk,
-                    total_bytes,
-                    buffer,
-                );
-
-                queue.push(message.clone());
-
-                chunk_id += 1;
-
-                if last_chunk {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                //debug!("Err: TCP -> SV (Write))");
-                continue;
-            }
-            Err(e) => {
-                return Err(e.into());
-            }
+            queue.push(message);
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            //debug!("Err: TCP -> SV (Write))");
+        }
+        Err(e) => {
+            return Err(e.into());
         }
     }
 
     debug!(
         "Client {:?} - Main thread: Send: bytes: {:?}",
-        client_id, n_bytes_read
+        client_id, total_bytes
     );
 
     debug!(
@@ -454,86 +402,46 @@ async fn send_operation(
 
 async fn receive_operation(
     client_id: u32,
-    op_id: ClientOperation,
+    _op_id: ClientOperation,
     stream: &mut TcpStream,
     queue: Arc<Queue<Message>>,
-    hashmap_queues: Arc<Mutex<HashMap<u32, Vec<Message>>>>,
+    config: ServerConfig,
 ) -> Result<(), Box<dyn Error>> {
+    let message = queue.pop().await;
 
-    let mut start = false;
-    let mut message_id = 0;
-    let mut chunk = 0;
+    //Send header
+    stream.write_u32(message.all_mess_len).await?;
+    stream.flush().await.unwrap();
 
-    let mut finish = false;
+    // Send data to Client
+    let iterations = message.all_mess_len as usize / config.receive_buffer_capacity;
 
-    let mut aux_queue = Vec::new();
+    if iterations > 0 {
+        for i in 0..iterations {
+            let index = i as usize;
 
-    let mut hashmap = hashmap_queues.lock().await;
-
-    loop {
-
-        let message;
-
-        if !hashmap.is_empty() {
-
-            if !start {
-                let (_, queue) = hashmap.clone().into_iter().next().unwrap();
-                aux_queue = queue;
-            }
-
-            if !aux_queue.is_empty() {
-                message = aux_queue.remove(0);
-            } else {
-                message = queue.pop().await;
-            }
-
-        } else {
-            message = queue.pop().await;
+            stream
+                .write_all(
+                    &message.bytes[config.receive_buffer_capacity * index
+                        ..config.receive_buffer_capacity * (index + 1)],
+                )
+                .await
+                .unwrap();
         }
 
-        if !start {
-            message_id = message.id;
-
-            stream.write_all(&message.all_mess_len.to_be_bytes()).await?;
-            stream.flush().await.unwrap();
-
-            start = true;
-        }
-
-        if message.chunk_id == chunk && message.op_id == op_id && message.id == message_id {
-            // Send data to Client
-            stream.write_all(&message.bytes).await?;
-            stream.flush().await.unwrap();
-
-            chunk += 1;
-
-            if message.last_chunk {
-                finish = true;
-            }
-
-        } else if message.id == message_id {
-
-            aux_queue.push(message);
-
-        } else {
-            if !hashmap.contains_key(&message.id) {
-                let mut new_queue = Vec::new();
-                let id = message.id;
-                new_queue.push(message);
-                hashmap.insert(id, new_queue);
-            } else {
-                let aux_queue = hashmap.get_mut(&message.id).unwrap();
-                aux_queue.push(message);
-            }
-        }
-
-        if finish {
-            break;
-        }
+        let iter = iterations as usize;
+        stream
+            .write_all(
+                &message.bytes
+                    [config.receive_buffer_capacity * iter..message.all_mess_len as usize],
+            )
+            .await
+            .unwrap();
+    } else {
+        stream.write_all(&message.bytes).await.unwrap();
     }
 
-    hashmap.remove(&message_id);
-    drop(hashmap);
+    stream.flush().await.unwrap();
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
@@ -556,61 +464,39 @@ async fn broadcast_root_operation(
     client_id: u32,
     stream: &mut TcpStream,
     list_queues: Vec<Arc<Queue<Message>>>,
-    config: ServerConfig,
 ) -> Result<(), Box<dyn Error>> {
-    let mut n_bytes_read = 0;
-    let mut chunk_id = 0;
-    let mut last_chunk = false;
-
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
 
-    loop {
-        let mut buffer = Vec::<u8>::with_capacity(config.send_buffer_capacity);
+    let mut buffer: Vec<u8> = vec![0; total_bytes as usize];
 
-        match stream.read_buf(&mut buffer).await {
-            Ok(0) => {
-                continue;
+    match stream.read_exact(&mut buffer).await {
+        Ok(_) => {
+            let message = Message::new(
+                id,
+                client_id,
+                ClientOperation::Send,
+                0,
+                true,
+                total_bytes,
+                buffer,
+            );
+
+            for queue in list_queues.clone().into_iter() {
+                queue.push(message.clone());
             }
-            Ok(n) => {
-                n_bytes_read += n;
-
-                if n_bytes_read == total_bytes.try_into().unwrap() {
-                    last_chunk = true;
-                }
-
-                let message = Message::new(
-                    id,
-                    client_id,
-                    ClientOperation::BroadcastRoot,
-                    chunk_id,
-                    last_chunk,
-                    total_bytes,
-                    buffer,
-                );
-                for queue in list_queues.clone().into_iter() {
-                    queue.push(message.clone());
-                }
-
-                chunk_id += 1;
-
-                if last_chunk {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                //debug!("Err: TCP -> SV (Write))");
-                continue;
-            }
-            Err(e) => {
-                return Err(e.into());
-            }
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            //debug!("Err: TCP -> SV (Write))");
+        }
+        Err(e) => {
+            return Err(e.into());
         }
     }
 
     debug!(
         "Client {:?} - Main thread: Send: bytes: {:?}",
-        client_id, n_bytes_read
+        client_id, total_bytes
     );
 
     debug!(

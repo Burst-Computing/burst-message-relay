@@ -308,7 +308,7 @@ impl Client {
         queue_id: Option<u32>,
         group_name: Option<&[u8]>,
     ) -> Vec<u8> {
-        let mut data: Vec<u8> = Vec::new();
+        let mut buffer = vec![0; 0];
 
         let stream_option = &mut self.tcp_stream;
 
@@ -317,35 +317,20 @@ impl Client {
         if Self::identify_operation(stream, protocol, queue_id, group_name).await
             == ServerResponse::Accepted
         {
-            let mut n_bytes_read = 0;
+            // Get header
             let total_bytes = stream.read_u32().await.unwrap();
 
-            loop {
-                let mut buffer = Vec::<u8>::with_capacity(self.config.receive_buffer_capacity);
+            buffer = vec![0; total_bytes as usize];
 
-                match stream.read_buf(&mut buffer).await {
-                    Ok(0) => {
-                        continue;
-                    }
-                    Ok(n) => {
-                        debug!(
-                            "Client - Read Tcp Operation: Reading Buffer: n_bytes {:?}",
-                            n
-                        );
-                        n_bytes_read += n;
-
-                        data.extend_from_slice(&buffer);
-
-                        if n_bytes_read == total_bytes.try_into().unwrap() {
-                            break;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        debug!("Client - Read Tcp Operation: Error: {:?}", e);
-                    }
+            match stream.read_exact(&mut buffer).await {
+                Ok(n) => {
+                    debug!("Client read {:?} bytes", n);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    //debug!("Err: TCP -> SV (Write))");
+                }
+                Err(e) => {
+                    debug!("Error: {:?}", e);
                 }
             }
 
@@ -356,6 +341,6 @@ impl Client {
             stream.flush().await.unwrap();
         }
 
-        data
+        buffer
     }
 }

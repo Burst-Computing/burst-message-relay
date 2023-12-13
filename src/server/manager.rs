@@ -26,7 +26,6 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
     let send_counter: Mutex<u32> = Mutex::new(0);
     let broadcast_counter: Mutex<u32> = Mutex::new(0);
 
-
     loop {
         match receiver.recv().await {
             Some(ToManager::Register(client_id, client_channel)) => {
@@ -67,11 +66,11 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::CreateBroadcastGroup(client_id, group_name, n_queues)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
-                if broadcast_groups.contains_key(&group_name){
+                if broadcast_groups.contains_key(&group_name) {
                     debug!("Manager Thread: Broadcast Group is already registered");
                 } else {
                     let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
-                    HashMap::new();
+                        HashMap::new();
 
                     for i in 0..n_queues {
                         bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
@@ -83,7 +82,6 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                     drop(bgroup_hashmap);
                 }
 
-                
                 client_channel
                     .send(FromManager::CreateBroadcastGroupResponse(
                         ServerResponse::Accepted,
@@ -95,7 +93,6 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
 
                 match queues_store.get(&queue_id) {
                     Some(queue) => {
-
                         let mut send_id = send_counter.lock().await;
 
                         client_channel
@@ -108,7 +105,6 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
 
                         *send_id += 1;
                         drop(send_id);
-
                     }
                     None => {
                         client_channel
