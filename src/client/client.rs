@@ -151,11 +151,12 @@ impl Client {
             let len = queues.len() as u32;
 
             stream.write_u32(len).await.unwrap();
+            stream.flush().await.unwrap();
 
             for slice in queues {
                 stream.write_u32(*slice).await.unwrap();
+                stream.flush().await.unwrap();
             }
-            stream.flush().await.unwrap();
 
             response = stream.read_u32().await.unwrap();
         }
@@ -268,6 +269,7 @@ impl Client {
 
             //Send total len
             stream.write_u32(len).await.unwrap();
+            stream.flush().await.unwrap();
 
             for slice in data {
                 let iterations = slice.len() / self.config.send_buffer_capacity;
@@ -283,6 +285,7 @@ impl Client {
                             )
                             .await
                             .unwrap();
+                        stream.flush().await.unwrap();
                     }
 
                     let iter = iterations as usize;
@@ -290,11 +293,12 @@ impl Client {
                         .write_all(&slice[self.config.send_buffer_capacity * iter..slice.len()])
                         .await
                         .unwrap();
+                    stream.flush().await.unwrap();
                 } else {
                     stream.write_all(slice).await.unwrap();
+                    stream.flush().await.unwrap();
                 }
             }
-            stream.flush().await.unwrap();
 
             response = stream.read_u32().await.unwrap();
         }

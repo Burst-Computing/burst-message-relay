@@ -427,6 +427,7 @@ async fn receive_operation(
                 )
                 .await
                 .unwrap();
+            stream.flush().await.unwrap();
         }
 
         let iter = iterations as usize;
@@ -437,11 +438,11 @@ async fn receive_operation(
             )
             .await
             .unwrap();
+        stream.flush().await.unwrap();
     } else {
         stream.write_all(&message.bytes).await.unwrap();
+        stream.flush().await.unwrap();
     }
-
-    stream.flush().await.unwrap();
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
