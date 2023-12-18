@@ -428,7 +428,7 @@ async fn broadcast_root_operation(
     id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    list_queues: Vec<Arc<Queue<Message>>>,
+    queue: Arc<Queue<Message>>
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -447,9 +447,7 @@ async fn broadcast_root_operation(
                 buffer,
             );
 
-            for queue in list_queues.clone().into_iter() {
-                queue.push(message.clone());
-            }
+            queue.push(message);
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");

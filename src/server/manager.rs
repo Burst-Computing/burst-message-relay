@@ -17,11 +17,7 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
     // Creating HashMap to store clients and queues
     let mut clients_store: HashMap<u32, Sender<FromManager>> = HashMap::new();
     let mut queues_store: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> = HashMap::new();
-    let mut broadcast_groups: HashMap<
-        String,
-        HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>>,
-    > = HashMap::new();
-    let bgroup_counter: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
+    let mut broadcast_groups: HashMap<String, Arc<deadqueue::unlimited::Queue<Message>>> = HashMap::new();
 
     let send_counter: Mutex<u32> = Mutex::new(0);
     let broadcast_counter: Mutex<u32> = Mutex::new(0);
@@ -63,23 +59,14 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                     .send(FromManager::InitQueuesResponse(ServerResponse::Accepted))
                     .await?;
             }
-            Some(ToManager::CreateBroadcastGroup(client_id, group_name, n_queues)) => {
+            Some(ToManager::CreateBroadcastGroup(client_id, group_name, _)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
                 if broadcast_groups.contains_key(&group_name) {
                     debug!("Manager Thread: Broadcast Group is already registered");
                 } else {
-                    let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Message>>> =
-                        HashMap::new();
 
-                    for i in 0..n_queues {
-                        bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
-                    }
-
-                    broadcast_groups.insert(group_name.clone(), bc_hashmap);
-                    let mut bgroup_hashmap = bgroup_counter.lock().await;
-                    bgroup_hashmap.insert(group_name, 0);
-                    drop(bgroup_hashmap);
+                    broadcast_groups.insert(group_name, Arc::new(TaskQueue::new()));
                 }
 
                 client_channel
@@ -135,20 +122,15 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::BroadcastRootRequest(client_id, group_name)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                let mut all_queues: Vec<Arc<deadqueue::unlimited::Queue<Message>>> = Vec::new();
-
                 match broadcast_groups.get(&group_name) {
                     Some(bc_group) => {
-                        for (_key, value) in bc_group {
-                            all_queues.push(value.clone());
-                        }
 
                         let mut bc_id = broadcast_counter.lock().await;
                         client_channel
                             .send(FromManager::BroadcastRootResponse(
                                 ServerResponse::Accepted,
                                 *bc_id,
-                                Some(all_queues),
+                                Some(bc_group.clone())
                             ))
                             .await?;
 
@@ -171,37 +153,13 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
 
                 match broadcast_groups.get(&group_id) {
                     Some(hashmap_group) => {
-                        let mut bgroup_hashmap = bgroup_counter.lock().await;
-                        let counter = bgroup_hashmap.get_mut(&group_id).unwrap();
-                        let actual_counter = *counter;
-                        *counter += 1;
-                        if *counter == hashmap_group.len() as u32 {
-                            *counter = 0;
-                        }
-                        drop(bgroup_hashmap);
 
-                        match hashmap_group.get(&actual_counter) {
-                            Some(queue) => {
-                                client_channel
+                        client_channel
                                     .send(FromManager::BroadcastResponse(
                                         ServerResponse::Accepted,
-                                        Some(queue.clone()),
+                                        Some(hashmap_group.clone()),
                                     ))
                                     .await?;
-                            }
-                            None => {
-                                debug!("Manager Thread: Error: The number of requests is greater than the number of queues!");
-                                client_channel
-                                    .send(FromManager::BroadcastResponse(
-                                        ServerResponse::Denied,
-                                        None,
-                                    ))
-                                    .await?;
-                                let mut bgroup_hashmap = bgroup_counter.lock().await;
-                                *bgroup_hashmap.get_mut(&group_id).unwrap() = 0;
-                                drop(bgroup_hashmap);
-                            }
-                        }
                     }
                     None => {
                         client_channel
