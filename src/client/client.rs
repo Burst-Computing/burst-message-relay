@@ -1,37 +1,26 @@
 use log::debug;
 
+use simple_pool::ResourcePoolGuard;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use std::sync::Arc;
 
 use crate::config::ClientConfig;
 use crate::protocol::{ClientOperation, ServerResponse};
+use crate::client::connection_pool::ConnectionPool;
 
 pub struct Client {
-    socket_addr: String,
-    tcp_stream: Option<TcpStream>,
+    connection_pool: Arc<ConnectionPool>,
     config: ClientConfig,
 }
 
 impl Client {
-    pub fn new(addr: &str, config: ClientConfig) -> Client {
+    pub fn new(connection_pool: Arc<ConnectionPool>, config: ClientConfig) -> Client {
         Client {
-            socket_addr: String::from(addr),
-            tcp_stream: None,
-            config: config,
+            connection_pool,
+            config,
         }
-    }
-
-    pub async fn connect(&mut self) -> i32 {
-        match TcpStream::connect(&self.socket_addr).await {
-            Ok(connection) => {
-                connection.set_nodelay(true).unwrap();
-                self.tcp_stream = Some(connection);
-            }
-            Err(_) => panic!(),
-        }
-
-        1
     }
 
     pub async fn init_queues(&mut self, data: &[u32]) -> u32 {
@@ -47,7 +36,7 @@ impl Client {
             n_queues,
         )
         .await
-    }
+    } 
 
     pub async fn send(&mut self, queue_id: u32, data: &[u8]) -> u32 {
         self.write_tcp(ClientOperation::Send, Some(queue_id), None, data)
@@ -91,18 +80,19 @@ impl Client {
             Some(group_name.as_bytes()),
         )
         .await
-    }
+    } 
 
     pub async fn close(&mut self) -> ServerResponse {
-        let stream_option = &mut self.tcp_stream;
 
-        let stream = stream_option.as_mut().unwrap();
+        let mut stream = self.connection_pool.get_connection().await;
+        let res = Self::identify_operation(&mut stream, ClientOperation::Close, None, None).await;
+        drop(stream);
 
-        Self::identify_operation(stream, ClientOperation::Close, None, None).await
+        return res;
     }
 
     async fn identify_operation(
-        stream: &mut TcpStream,
+        stream: &mut ResourcePoolGuard<TcpStream>,
         op_id: ClientOperation,
         queue_id: Option<u32>,
         group_name: Option<&[u8]>,
@@ -140,11 +130,9 @@ impl Client {
     ) -> u32 {
         let mut response: u32 = 999999;
 
-        let stream_option = &mut self.tcp_stream;
+        let mut stream = self.connection_pool.get_connection().await;
 
-        let stream = stream_option.as_mut().unwrap();
-
-        if Self::identify_operation(stream, protocol, group_id, group_name).await
+        if Self::identify_operation(&mut stream, protocol, group_id, group_name).await
             == ServerResponse::Accepted
         {
             // Header
@@ -161,6 +149,8 @@ impl Client {
             response = stream.read_u32().await.unwrap();
         }
 
+        drop(stream);
+
         response
     }
 
@@ -173,11 +163,9 @@ impl Client {
     ) -> u32 {
         let mut response: u32 = 999999;
 
-        let stream_option = &mut self.tcp_stream;
+        let mut stream = self.connection_pool.get_connection().await;
 
-        let stream = stream_option.as_mut().unwrap();
-
-        if Self::identify_operation(stream, protocol, group_id, group_name).await
+        if Self::identify_operation(&mut stream, protocol, group_id, group_name).await
             == ServerResponse::Accepted
         {
             // N_queues
@@ -187,8 +175,10 @@ impl Client {
             response = stream.read_u32().await.unwrap();
         }
 
+        drop(stream);
+
         response
-    }
+    } 
 
     async fn write_tcp(
         &mut self,
@@ -199,11 +189,9 @@ impl Client {
     ) -> u32 {
         let mut response: u32 = 999999;
 
-        let stream_option = &mut self.tcp_stream;
+        let mut stream = self.connection_pool.get_connection().await;
 
-        let stream = stream_option.as_mut().unwrap();
-
-        if Self::identify_operation(stream, protocol, queue_id, group_name).await
+        if Self::identify_operation(&mut stream, protocol, queue_id, group_name).await
             == ServerResponse::Accepted
         {
             // Header
@@ -242,6 +230,8 @@ impl Client {
             response = stream.read_u32().await.unwrap();
         }
 
+        drop(stream);
+
         response
     }
 
@@ -254,11 +244,9 @@ impl Client {
     ) -> u32 {
         let mut response: u32 = 999999;
 
-        let stream_option = &mut self.tcp_stream;
+        let mut stream = self.connection_pool.get_connection().await;
 
-        let stream = stream_option.as_mut().unwrap();
-
-        if Self::identify_operation(stream, protocol, queue_id, group_name).await
+        if Self::identify_operation(&mut stream, protocol, queue_id, group_name).await
             == ServerResponse::Accepted
         {
             // Header
@@ -303,6 +291,8 @@ impl Client {
             response = stream.read_u32().await.unwrap();
         }
 
+        drop(stream);
+
         response
     }
 
@@ -314,11 +304,9 @@ impl Client {
     ) -> Vec<u8> {
         let mut buffer = vec![0; 0];
 
-        let stream_option = &mut self.tcp_stream;
+        let mut stream = self.connection_pool.get_connection().await;
 
-        let stream = stream_option.as_mut().unwrap();
-
-        if Self::identify_operation(stream, protocol, queue_id, group_name).await
+        if Self::identify_operation(&mut stream, protocol, queue_id, group_name).await
             == ServerResponse::Accepted
         {
             // Get header
@@ -344,6 +332,8 @@ impl Client {
                 .unwrap();
             stream.flush().await.unwrap();
         }
+
+        drop(stream);
 
         buffer
     }

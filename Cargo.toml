@@ -10,6 +10,7 @@ tokio = {version = "1", features = ["full"]}
 deadqueue = "0.2.4"
 log = "0.4"
 env_logger = "0.6"
+simple-pool = "0.0.16"
 
 [[bin]]
 name = "server"
@@ -30,3 +31,7 @@ path = "examples/test.rs"
 [[bin]]
 name = "send"
 path = "examples/send_refs.rs"
+
+[[bin]]
+name = "conn_pool"
+path = "examples/conn_pool.rs"
