@@ -22,9 +22,9 @@ pub enum FromManager {
     Accept(ServerResponse),
     InitQueuesResponse(ServerResponse),
     CreateBroadcastGroupResponse(ServerResponse),
-    SendResponse(ServerResponse, u32, Option<Arc<Queue<Message>>>),
-    ReceiveResponse(ServerResponse, Option<Arc<Queue<Message>>>),
-    BroadcastRootResponse(ServerResponse, u32, Option<Arc<Queue<Message>>>),
-    BroadcastResponse(ServerResponse, Option<Arc<Queue<Message>>>),
+    SendResponse(ServerResponse, u32, Option<Arc<Queue<Arc<Message>>>>),
+    ReceiveResponse(ServerResponse, Option<Arc<Queue<Arc<Message>>>>),
+    BroadcastRootResponse(ServerResponse, u32, Option<Vec<Arc<Queue<Arc<Message>>>>>),
+    BroadcastResponse(ServerResponse, Option<Arc<Queue<Arc<Message>>>>),
     Close(),
 }

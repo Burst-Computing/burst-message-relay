@@ -53,7 +53,7 @@ impl Client {
             .await
     }
 
-    pub async fn broadcast_root(&mut self, group_name: String, data: &[u8]) -> u32 {
+    pub async fn broadcast_root(&mut self, group_name: &str, data: &[u8]) -> u32 {
         self.write_tcp(
             ClientOperation::BroadcastRoot,
             None,
@@ -63,7 +63,7 @@ impl Client {
         .await
     }
 
-    pub async fn broadcast_root_refs(&mut self, group_name: String, data: &[&[u8]]) -> u32 {
+    pub async fn broadcast_root_refs(&mut self, group_name: &str, data: &[&[u8]]) -> u32 {
         self.write_tcp_refs(
             ClientOperation::BroadcastRoot,
             None,
@@ -73,7 +73,7 @@ impl Client {
         .await
     }
 
-    pub async fn broadcast(&mut self, group_name: String) -> Vec<u8> {
+    pub async fn broadcast(&mut self, group_name: &str) -> Vec<u8> {
         self.read_tcp(
             ClientOperation::Broadcast,
             None,
@@ -81,15 +81,6 @@ impl Client {
         )
         .await
     } 
-
-    pub async fn close(&mut self) -> ServerResponse {
-
-        let mut stream = self.connection_pool.get_connection().await;
-        let res = Self::identify_operation(&mut stream, ClientOperation::Close, None, None).await;
-        drop(stream);
-
-        return res;
-    }
 
     async fn identify_operation(
         stream: &mut ResourcePoolGuard<TcpStream>,

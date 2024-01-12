@@ -345,7 +345,7 @@ async fn send_operation(
     id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Message>>,
+    queue: Arc<Queue<Arc<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -363,7 +363,7 @@ async fn send_operation(
                 total_bytes,
                 buffer,
             );
-            queue.push(message);
+            queue.push(Arc::new(message));
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");
@@ -396,7 +396,7 @@ async fn receive_operation(
     client_id: u32,
     _op_id: ClientOperation,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Message>>,
+    queue: Arc<Queue<Arc<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     let message = queue.pop().await;
 
@@ -428,7 +428,7 @@ async fn broadcast_root_operation(
     id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Message>>
+    list_queues: Vec<Arc<Queue<Arc<Message>>>>
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -447,7 +447,11 @@ async fn broadcast_root_operation(
                 buffer,
             );
 
-            queue.push(message);
+            let message_ref = Arc::new(message);
+
+            for queue in list_queues {
+                queue.push(message_ref.clone());
+            }
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");

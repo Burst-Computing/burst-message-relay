@@ -1,6 +1,10 @@
 use simple_pool::ResourcePool;
 use simple_pool::ResourcePoolGuard;
 use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncReadExt;
+
+use crate::protocol::{ClientOperation, ServerResponse};
 
 pub struct ConnectionPool {
     conns: ResourcePool<TcpStream>,
@@ -37,6 +41,23 @@ impl ConnectionPool {
 
     pub async fn get_connection(&self) -> ResourcePoolGuard<TcpStream> {
         return self.conns.get().await;
+    }
+
+    pub async fn close(&self) {
+
+        for _ in 0..self.max_connections {
+            let mut conn = self.conns.get().await;
+            conn.write_u32(ClientOperation::Close as u32).await.unwrap();
+            conn.flush().await.unwrap();
+
+            let sv_code = conn.read_u32().await.unwrap();
+
+            if sv_code == ServerResponse::Close as u32 {
+                conn.forget_resource();
+            }
+
+            drop(conn);
+        }
     }
 
 }
