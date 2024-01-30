@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
+use tokio::sync::Mutex;
 use crate::protocol::{ClientOperation, ServerResponse};
 use crate::server::enums::{FromManager, ToManager};
 use crate::server::message::Message;
@@ -266,7 +266,7 @@ async fn protocol_from_manager(
             if sv_code == ServerResponse::Denied {
                 debug!("Client {:?} - Main Thread: Not enough queues", client_id);
             } else {
-                receive_operation(
+                broadcast_operation(
                     client_id,
                     ClientOperation::BroadcastRoot,
                     stream,
@@ -345,7 +345,7 @@ async fn send_operation(
     id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Arc<Message>>>,
+    queue: Arc<Sender<Arc<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -363,7 +363,7 @@ async fn send_operation(
                 total_bytes,
                 buffer,
             );
-            queue.push(Arc::new(message));
+            let _ = queue.send(Arc::new(message)).await;
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");
@@ -396,9 +396,9 @@ async fn receive_operation(
     client_id: u32,
     _op_id: ClientOperation,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Arc<Message>>>,
+    queue: Arc<Mutex<Receiver<Arc<Message>>>>,
 ) -> Result<(), Box<dyn Error>> {
-    let message = queue.pop().await;
+    let message = queue.lock().await.recv().await.unwrap();
 
     //Send header
     stream.write_u32(message.all_mess_len).await?;
@@ -476,6 +476,38 @@ async fn broadcast_root_operation(
         .await
         .unwrap();
     stream.flush().await.unwrap(); 
+
+    Ok(())
+}
+
+async fn broadcast_operation(
+    client_id: u32,
+    _op_id: ClientOperation,
+    stream: &mut TcpStream,
+    queue: Arc<Queue<Arc<Message>>>,
+) -> Result<(), Box<dyn Error>> {
+    let message = queue.pop().await;
+
+    //Send header
+    stream.write_u32(message.all_mess_len).await?;
+    stream.flush().await.unwrap();
+
+    // Send data to Client
+    stream.write_all(&message.bytes).await.unwrap();
+
+
+    debug!(
+        "Client {:?} - Main thread: Receive Operation completed",
+        client_id
+    );
+
+    // Get response from Client
+    let conf_code = stream.read_u32().await.unwrap();
+
+    debug!(
+        "Client {:?} - Main thread: Operation response: {:?}",
+        client_id, conf_code
+    );
 
     Ok(())
 }

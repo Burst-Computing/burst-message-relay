@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
 use crate::protocol::ServerResponse;
@@ -16,7 +16,8 @@ type TaskQueue = deadqueue::unlimited::Queue<Arc<Message>>;
 pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Error>> {
     // Creating HashMap to store clients and queues
     let mut clients_store: HashMap<u32, Sender<FromManager>> = HashMap::new();
-    let mut queues_store: HashMap<u32, Arc<deadqueue::unlimited::Queue<Arc<Message>>>> = HashMap::new();
+    let mut send_store: HashMap<u32, Arc<Sender<Arc<Message>>>> = HashMap::new();
+    let mut recv_store: HashMap<u32, Arc<Mutex<Receiver<Arc<Message>>>>> = HashMap::new();
     let mut broadcast_groups: HashMap<
         String,
         HashMap<u32, Arc<deadqueue::unlimited::Queue<Arc<Message>>>>,
@@ -52,10 +53,12 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
                 for name in queues {
-                    if find_key(name, &queues_store) {
+                    if find_key(name, &send_store) {
                         debug!("Manager Thread: Queue id is already registered");
                     } else {
-                        queues_store.insert(name, Arc::new(TaskQueue::new()));
+                        let (send, recv) = mpsc::channel(1024*1024);
+                        send_store.insert(name, Arc::new(send));
+                        recv_store.insert(name, Arc::new(Mutex::new(recv)));
                     }
                 }
 
@@ -91,7 +94,7 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::SendRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match queues_store.get(&queue_id) {
+                match send_store.get(&queue_id) {
                     Some(queue) => {
                         let mut send_id = send_counter.lock().await;
 
@@ -116,7 +119,7 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::ReceiveRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match queues_store.get(&queue_id) {
+                match recv_store.get(&queue_id) {
                     Some(queue) => {
                         client_channel
                             .send(FromManager::ReceiveResponse(

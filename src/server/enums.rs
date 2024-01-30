@@ -2,8 +2,8 @@ use deadqueue::unlimited::Queue;
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc::Sender;
-
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use crate::protocol::ServerResponse;
 use crate::server::message::Message;
 
@@ -22,8 +22,8 @@ pub enum FromManager {
     Accept(ServerResponse),
     InitQueuesResponse(ServerResponse),
     CreateBroadcastGroupResponse(ServerResponse),
-    SendResponse(ServerResponse, u32, Option<Arc<Queue<Arc<Message>>>>),
-    ReceiveResponse(ServerResponse, Option<Arc<Queue<Arc<Message>>>>),
+    SendResponse(ServerResponse, u32, Option<Arc<Sender<Arc<Message>>>>),
+    ReceiveResponse(ServerResponse, Option<Arc<Mutex<Receiver<Arc<Message>>>>>),
     BroadcastRootResponse(ServerResponse, u32, Option<Vec<Arc<Queue<Arc<Message>>>>>),
     BroadcastResponse(ServerResponse, Option<Arc<Queue<Arc<Message>>>>),
     Close(),
