@@ -1,8 +1,8 @@
 use simple_pool::ResourcePool;
 use simple_pool::ResourcePoolGuard;
-use tokio::net::TcpStream;
-use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 
 use crate::protocol::{ClientOperation, ServerResponse};
 
@@ -13,7 +13,6 @@ pub struct ConnectionPool {
 }
 
 impl ConnectionPool {
-
     pub fn new(end_point: &str, max_connections: u32) -> ConnectionPool {
         ConnectionPool {
             conns: ResourcePool::new(),
@@ -44,7 +43,6 @@ impl ConnectionPool {
     }
 
     pub async fn close(&self) {
-
         for _ in 0..self.max_connections {
             let mut conn = self.conns.get().await;
             conn.write_u32(ClientOperation::Close as u32).await.unwrap();
@@ -59,5 +57,4 @@ impl ConnectionPool {
             drop(conn);
         }
     }
-
 }
