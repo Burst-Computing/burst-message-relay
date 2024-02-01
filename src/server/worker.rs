@@ -1,16 +1,16 @@
 use log::debug;
 
 use std::error::Error;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crate::protocol::{ClientOperation, ServerResponse};
 use dashmap::DashMap;
+use std::collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::broadcast::{self, Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::sync::broadcast::{self, Receiver as BroadcastReceiver, Sender as BroadcastSender};
 
 pub async fn worker_task(
     client_id: u32,
@@ -18,8 +18,10 @@ pub async fn worker_task(
     send_store: Arc<DashMap<u32, Arc<Sender<Arc<Vec<u8>>>>>>,
     recv_store: Arc<DashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>>,
     broadcast_send_store: Arc<DashMap<String, Arc<BroadcastSender<Arc<Vec<u8>>>>>>,
-    broadcast_recv_store: Arc<DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>>,
-    bgroup_counter: Arc<DashMap<String, Mutex<u32>>>,
+    broadcast_recv_store: Arc<
+        DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>,
+    >,
+    bgroup_counter: Arc<Mutex<HashMap<String, u32>>>,
 ) -> Result<(), Box<dyn Error>> {
     debug!(
         "Client {:?} - Main thread: Start Client Connection",
@@ -31,8 +33,7 @@ pub async fn worker_task(
     while alive {
         debug!("Client {:?} - Main thread: Checking Operation", client_id);
 
-        let (_sv_code, operation_id) =
-            identify_operation(client_id, &mut stream).await;
+        let (_sv_code, operation_id) = identify_operation(client_id, &mut stream).await;
 
         // Sv_code -> TO DO
 
@@ -74,12 +75,7 @@ pub async fn worker_task(
                     client_id
                 );
 
-                alive = send_operation(
-                    client_id,
-                    &mut stream,
-                    send_store.clone(),
-                )
-                .await;
+                alive = send_operation(client_id, &mut stream, send_store.clone()).await;
             }
 
             ClientOperation::Receive => {
@@ -88,12 +84,7 @@ pub async fn worker_task(
                     client_id
                 );
 
-                alive = receive_operation(
-                    client_id,
-                    &mut stream,
-                    recv_store.clone(),
-                )
-                .await;
+                alive = receive_operation(client_id, &mut stream, recv_store.clone()).await;
             }
 
             ClientOperation::BroadcastRoot => {
@@ -102,12 +93,9 @@ pub async fn worker_task(
                     client_id
                 );
 
-                alive = broadcast_root_operation(
-                    client_id,
-                    &mut stream,
-                    broadcast_send_store.clone(),
-                )
-                .await;
+                alive =
+                    broadcast_root_operation(client_id, &mut stream, broadcast_send_store.clone())
+                        .await;
             }
 
             ClientOperation::Broadcast => {
@@ -154,7 +142,6 @@ async fn identify_operation(
     client_id: u32,
     stream: &mut TcpStream,
 ) -> (ServerResponse, ClientOperation) {
-
     // Identify operation from Client
     let op_id: ClientOperation = stream.read_u32().await.unwrap().into();
 
@@ -181,7 +168,7 @@ async fn identify_operation(
     if op_id != ClientOperation::Close {
         stream.write_u32(sv_code as u32).await.unwrap();
         stream.flush().await.unwrap();
-    } 
+    }
 
     (sv_code.into(), op_id.into())
 }
@@ -192,7 +179,6 @@ async fn init_queues(
     send_store: Arc<DashMap<u32, Arc<Sender<Arc<Vec<u8>>>>>>,
     recv_store: Arc<DashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>>,
 ) -> bool {
-
     let mut sv_code = ServerResponse::Denied;
 
     //Read from tcp
@@ -219,10 +205,7 @@ async fn init_queues(
         n += 1;
     }
 
-    stream
-        .write_u32(sv_code as u32)
-        .await
-        .unwrap();
+    stream.write_u32(sv_code as u32).await.unwrap();
     stream.flush().await.unwrap();
 
     debug!(
@@ -237,14 +220,15 @@ async fn create_bc_group(
     client_id: u32,
     stream: &mut TcpStream,
     broadcast_send_store: Arc<DashMap<String, Arc<BroadcastSender<Arc<Vec<u8>>>>>>,
-    broadcast_recv_store: Arc<DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>>,
-    bgroup_counter: Arc<DashMap<String, Mutex<u32>>>
+    broadcast_recv_store: Arc<
+        DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>,
+    >,
+    bgroup_counter: Arc<Mutex<HashMap<String, u32>>>,
 ) -> bool {
-
     let mut sv_code = ServerResponse::Denied;
 
     // Read group name
- 
+
     let group_name = stream.read_u32().await.unwrap();
 
     // Read number of queues
@@ -258,11 +242,9 @@ async fn create_bc_group(
             client_id, gp_name
         );
     } else {
+        let bc_hashmap: DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>> = DashMap::new();
 
-        let bc_hashmap: DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>> =
-            DashMap::new();
-
-        let (tx, _) = broadcast::channel(1024*1024);
+        let (tx, _) = broadcast::channel(1024 * 1024);
 
         for i in 0..n_queues {
             bc_hashmap.insert(i, Arc::new(Mutex::new(tx.subscribe())));
@@ -270,15 +252,14 @@ async fn create_bc_group(
 
         broadcast_recv_store.insert(gp_name.clone(), bc_hashmap);
         broadcast_send_store.insert(gp_name.clone(), Arc::new(tx));
-        bgroup_counter.insert(gp_name, Mutex::new(0));
+        let mut bgroup_hashmap = bgroup_counter.lock().await;
+        bgroup_hashmap.insert(gp_name, 0);
+        drop(bgroup_hashmap);
 
         sv_code = ServerResponse::Accepted;
     }
 
-    stream
-        .write_u32(sv_code as u32)
-        .await
-        .unwrap();
+    stream.write_u32(sv_code as u32).await.unwrap();
     stream.flush().await.unwrap();
 
     debug!(
@@ -294,20 +275,18 @@ async fn send_operation(
     stream: &mut TcpStream,
     send_store: Arc<DashMap<u32, Arc<Sender<Arc<Vec<u8>>>>>>,
 ) -> bool {
-
     // Get queue_id
     let queue_id = stream.read_u32().await.unwrap();
 
     // Get queue
     match send_store.get(&queue_id) {
         Some(queue) => {
-
             // Queue exists
             stream
                 .write_u32(ServerResponse::Accepted as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             // Get header
             let total_bytes = stream.read_u32().await.unwrap();
@@ -347,13 +326,12 @@ async fn send_operation(
                 .write_u32(ServerResponse::Denied as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             debug!(
                 "Client {:?} - Main thread: Send Operation denied - Queue {:?} not found",
                 client_id, queue_id
             );
-
         }
     }
 
@@ -365,20 +343,17 @@ async fn receive_operation(
     stream: &mut TcpStream,
     recv_store: Arc<DashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>>,
 ) -> bool {
-
     // Get queue_id
     let queue_id = stream.read_u32().await.unwrap();
 
     match recv_store.get(&queue_id) {
         Some(queue) => {
-
             // Queue exists
             stream
                 .write_u32(ServerResponse::Accepted as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
-
+            stream.flush().await.unwrap();
 
             let message = queue.lock().await.recv().await.unwrap();
 
@@ -407,7 +382,7 @@ async fn receive_operation(
                 .write_u32(ServerResponse::Denied as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             debug!(
                 "Client {:?} - Main thread: Receive Operation denied - Queue {:?} not found",
@@ -424,20 +399,18 @@ async fn broadcast_root_operation(
     stream: &mut TcpStream,
     broadcast_send_store: Arc<DashMap<String, Arc<BroadcastSender<Arc<Vec<u8>>>>>>,
 ) -> bool {
-
     // Read group name
     let group_name = stream.read_u32().await.unwrap();
     let group_name_str = group_name.to_string();
 
     match broadcast_send_store.get(&group_name_str) {
         Some(queue) => {
-
             // Group name exists
             stream
                 .write_u32(ServerResponse::Accepted as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             // Get header
             let total_bytes = stream.read_u32().await.unwrap();
@@ -477,7 +450,7 @@ async fn broadcast_root_operation(
                 .write_u32(ServerResponse::Denied as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             debug!(
                 "Client {:?} - Main thread: Broadcast Root Operation denied - Group Name {:?} not found",
@@ -492,38 +465,35 @@ async fn broadcast_root_operation(
 async fn broadcast_operation(
     client_id: u32,
     stream: &mut TcpStream,
-    broadcast_recv_store: Arc<DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>>,
-    bgroup_counter: Arc<DashMap<String, Mutex<u32>>>,
+    broadcast_recv_store: Arc<
+        DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>,
+    >,
+    bgroup_counter: Arc<Mutex<HashMap<String, u32>>>,
 ) -> bool {
-
     // Read group name
     let group_name = stream.read_u32().await.unwrap();
     let group_name_str = group_name.to_string();
 
     match broadcast_recv_store.get(&group_name_str) {
         Some(hashmap_group) => {
-
             // Group name exists
             stream
                 .write_u32(ServerResponse::Accepted as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
-            let mutex_counter = bgroup_counter.get_mut(&group_name_str).unwrap();
-
-            let mut counter = mutex_counter.lock().await;
+            let mut bgroup_hashmap = bgroup_counter.lock().await;
+            let counter = bgroup_hashmap.get_mut(&group_name_str).unwrap();
             let actual_counter = *counter;
             *counter += 1;
-
             if *counter == hashmap_group.len() as u32 {
                 *counter = 0;
             }
-            drop(counter);
+            drop(bgroup_hashmap);
 
             match hashmap_group.get(&actual_counter) {
                 Some(queue) => {
-
                     let message = queue.lock().await.recv().await.unwrap();
 
                     //Send header
@@ -545,11 +515,9 @@ async fn broadcast_operation(
                         "Client {:?} - Main thread: Broadcast Operation response: {:?}",
                         client_id, conf_code
                     );
-
                 }
                 None => {
                     debug!("Client {:?} - Main thread: Error: The number of requests is greater than the number of queues!", client_id);
-                    //atomic_counter.fetch_sub(actual_counter, Ordering::SeqCst);
                 }
             }
         }
@@ -558,7 +526,7 @@ async fn broadcast_operation(
                 .write_u32(ServerResponse::Denied as u32)
                 .await
                 .unwrap();
-            stream.flush().await.unwrap(); 
+            stream.flush().await.unwrap();
 
             debug!(
                 "Client {:?} - Main thread: Broadcast Operation denied - Group Name {:?} not found",
@@ -566,8 +534,6 @@ async fn broadcast_operation(
             );
         }
     }
-
-    
 
     return true;
 }

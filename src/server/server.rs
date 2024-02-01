@@ -1,20 +1,22 @@
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::sync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
 
 use crate::server::worker;
 
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct ServerDataStructures {
     send_store: Arc<DashMap<u32, Arc<Sender<Arc<Vec<u8>>>>>>,
     recv_store: Arc<DashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>>,
     broadcast_send_store: Arc<DashMap<String, Arc<BroadcastSender<Arc<Vec<u8>>>>>>,
-    broadcast_recv_store: Arc<DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>>,
-    bgroup_counter: Arc<DashMap<String, Mutex<u32>>>,
+    broadcast_recv_store:
+        Arc<DashMap<String, DashMap<u32, Arc<Mutex<BroadcastReceiver<Arc<Vec<u8>>>>>>>>,
+    bgroup_counter: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 pub struct Server {
@@ -36,7 +38,7 @@ impl Server {
                 recv_store: Arc::new(DashMap::new()),
                 broadcast_send_store: Arc::new(DashMap::new()),
                 broadcast_recv_store: Arc::new(DashMap::new()),
-                bgroup_counter: Arc::new(DashMap::new()),
+                bgroup_counter: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }

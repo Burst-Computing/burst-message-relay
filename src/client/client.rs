@@ -29,7 +29,6 @@ impl Client {
     }
 
     pub async fn create_bc_group(&mut self, group_name: String, n_queues: u32) -> u32 {
-
         self.create_bc_group_operation(
             ClientOperation::CreateBcGroup,
             group_name.parse().unwrap(),
@@ -86,7 +85,6 @@ impl Client {
         stream: &mut ResourcePoolGuard<TcpStream>,
         op_id: ClientOperation,
     ) -> ServerResponse {
-
         stream.write_u32(op_id as u32).await.unwrap();
         stream.flush().await.unwrap();
 
@@ -98,21 +96,14 @@ impl Client {
         );
 
         sv_code.into()
-        
     }
 
-    async fn init_queues_operation(
-        &mut self,
-        protocol: ClientOperation,
-        queues: &[u32],
-    ) -> u32 {
+    async fn init_queues_operation(&mut self, protocol: ClientOperation, queues: &[u32]) -> u32 {
         let mut response: u32 = 999999;
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol).await
-            == ServerResponse::Accepted
-        {
+        if Self::identify_operation(&mut stream, protocol).await == ServerResponse::Accepted {
             // Header
             let len = queues.len() as u32;
 
@@ -142,10 +133,7 @@ impl Client {
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol).await
-            == ServerResponse::Accepted
-        {
-
+        if Self::identify_operation(&mut stream, protocol).await == ServerResponse::Accepted {
             // Send group name
             stream.write_u32(group_name).await.unwrap();
             stream.flush().await.unwrap();
@@ -162,8 +150,11 @@ impl Client {
         response
     }
 
-    async fn check_queue(queue_id: Option<u32>, group_name: Option<u32>, stream: &mut ResourcePoolGuard<TcpStream>) -> ServerResponse {
-
+    async fn check_queue(
+        queue_id: Option<u32>,
+        group_name: Option<u32>,
+        stream: &mut ResourcePoolGuard<TcpStream>,
+    ) -> ServerResponse {
         match queue_id {
             Some(id) => {
                 // Send queue id
@@ -181,7 +172,6 @@ impl Client {
         let sv_code = stream.read_u32().await.unwrap();
 
         sv_code.into()
-
     }
 
     async fn write_tcp(
@@ -195,17 +185,11 @@ impl Client {
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol).await
-            == ServerResponse::Accepted
-        {
-
+        if Self::identify_operation(&mut stream, protocol).await == ServerResponse::Accepted {
             match Self::check_queue(queue_id, group_name, &mut stream).await {
                 ServerResponse::Denied => {
                     if protocol == ClientOperation::Receive {
-                        debug!(
-                            "Client - {:?}: Queue {:?} not found",
-                            protocol, queue_id
-                        );
+                        debug!("Client - {:?}: Queue {:?} not found", protocol, queue_id);
                     } else {
                         debug!(
                             "Client - {:?}: Group Name {:?} not found",
@@ -217,7 +201,8 @@ impl Client {
                 ServerResponse::Accepted => {
                     // Header
                     let len;
-                    if protocol == ClientOperation::InitQueue || protocol == ClientOperation::CreateBcGroup
+                    if protocol == ClientOperation::InitQueue
+                        || protocol == ClientOperation::CreateBcGroup
                     {
                         len = (data.len() / 4) as u32;
                     } else {
@@ -240,7 +225,9 @@ impl Client {
                         }
 
                         stream
-                            .write_all(&data[self.config.send_buffer_capacity * iterations..data.len()])
+                            .write_all(
+                                &data[self.config.send_buffer_capacity * iterations..data.len()],
+                            )
                             .await
                             .unwrap();
                     } else {
@@ -274,17 +261,11 @@ impl Client {
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol).await
-            == ServerResponse::Accepted
-        {
-
+        if Self::identify_operation(&mut stream, protocol).await == ServerResponse::Accepted {
             match Self::check_queue(queue_id, group_name, &mut stream).await {
                 ServerResponse::Denied => {
                     if protocol == ClientOperation::Receive {
-                        debug!(
-                            "Client - {:?}: Queue {:?} not found",
-                            protocol, queue_id
-                        );
+                        debug!("Client - {:?}: Queue {:?} not found", protocol, queue_id);
                     } else {
                         debug!(
                             "Client - {:?}: Group Name {:?} not found",
@@ -323,7 +304,9 @@ impl Client {
 
                             let iter = iterations as usize;
                             stream
-                                .write_all(&slice[self.config.send_buffer_capacity * iter..slice.len()])
+                                .write_all(
+                                    &slice[self.config.send_buffer_capacity * iter..slice.len()],
+                                )
                                 .await
                                 .unwrap();
                             stream.flush().await.unwrap();
@@ -359,24 +342,18 @@ impl Client {
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol).await
-            == ServerResponse::Accepted
-        {
-
+        if Self::identify_operation(&mut stream, protocol).await == ServerResponse::Accepted {
             match Self::check_queue(queue_id, group_name, &mut stream).await {
                 ServerResponse::Denied => {
                     if protocol == ClientOperation::Receive {
-                        debug!(
-                            "Client - {:?}: Queue {:?} not found",
-                            protocol, queue_id
-                        );
+                        debug!("Client - {:?}: Queue {:?} not found", protocol, queue_id);
                     } else {
                         debug!(
                             "Client - {:?}: Group Name {:?} not found",
                             protocol, queue_id
                         );
                     }
-                    
+
                     return buffer;
                 }
                 ServerResponse::Accepted => {
@@ -410,7 +387,6 @@ impl Client {
                     unreachable!();
                 }
             }
-            
         }
 
         drop(stream);
