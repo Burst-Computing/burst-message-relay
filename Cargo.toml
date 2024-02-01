@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 tokio = {version = "1", features = ["full"]}
-deadqueue = "0.2.4"
 log = "0.4"
 env_logger = "0.6"
 simple-pool = "0.0.16"
