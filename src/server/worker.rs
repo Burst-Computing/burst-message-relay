@@ -1,19 +1,16 @@
-use deadqueue::unlimited::Queue;
-
 use log::debug;
 
 use std::error::Error;
 use std::sync::Arc;
 
+use crate::protocol::{ClientOperation, ServerResponse};
+use crate::server::enums::{FromManager, ToManager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::Mutex;
 
-use crate::protocol::{ClientOperation, ServerResponse};
-use crate::server::enums::{FromManager, ToManager};
-use crate::server::message::Message;
-
-pub async fn process_task(
+pub async fn worker_task(
     client_id: u32,
     mut stream: TcpStream,
     send_to_manager: Sender<ToManager>,
@@ -24,14 +21,13 @@ pub async fn process_task(
     );
 
     //Establish 1-1 channel to communicate with Manager
-    let (manager_sender, mut receive_from_manager) = mpsc::channel(1024);
+    let (manager_sender, mut receive_from_manager) = mpsc::channel(1024 * 1024);
 
     // Register new client -> Message to Manager
     let new_client = ToManager::Register(client_id, manager_sender.clone());
     send_to_manager.send(new_client).await?;
 
-    let mut alive =
-        protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
+    let mut alive = protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
 
     while alive {
         debug!("Client {:?} - Main thread: Checking Operation", client_id);
@@ -86,8 +82,7 @@ pub async fn process_task(
                 send_to_manager.send(send_request).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
-                        .await;
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
             }
 
             ClientOperation::Receive => {
@@ -99,12 +94,8 @@ pub async fn process_task(
                 let receive_request = ToManager::ReceiveRequest(client_id, queue_id.unwrap());
                 send_to_manager.send(receive_request).await?;
 
-                alive = protocol_from_manager(
-                    &mut receive_from_manager,
-                    client_id,
-                    &mut stream,
-                )
-                .await;
+                alive =
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
             }
 
             ClientOperation::BroadcastRoot => {
@@ -118,8 +109,7 @@ pub async fn process_task(
                 send_to_manager.send(receive_request).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
-                        .await;
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
             }
 
             ClientOperation::Broadcast => {
@@ -131,12 +121,8 @@ pub async fn process_task(
                 let receive_request = ToManager::BroadcastRequest(client_id, group_name.unwrap());
                 send_to_manager.send(receive_request).await?;
 
-                alive = protocol_from_manager(
-                    &mut receive_from_manager,
-                    client_id,
-                    &mut stream,
-                )
-                .await;
+                alive =
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
             }
 
             ClientOperation::Close => {
@@ -145,8 +131,7 @@ pub async fn process_task(
                 send_to_manager.send(close_client).await?;
 
                 alive =
-                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream)
-                        .await;
+                    protocol_from_manager(&mut receive_from_manager, client_id, &mut stream).await;
             }
 
             ClientOperation::Error => {
@@ -224,14 +209,14 @@ async fn protocol_from_manager(
                 stream.flush().await.unwrap();
             }
         }
-        Some(FromManager::SendResponse(sv_code, id, queue)) => {
+        Some(FromManager::SendResponse(sv_code, queue)) => {
             if sv_code == ServerResponse::Denied {
                 debug!(
                     "Client {:?} - Main Thread: Destination Client queue not found",
                     client_id
                 );
             } else {
-                send_operation(id, client_id, stream, queue.unwrap())
+                send_operation(client_id, stream, queue.unwrap())
                     .await
                     .unwrap();
             }
@@ -253,11 +238,11 @@ async fn protocol_from_manager(
                 .unwrap();
             }
         }
-        Some(FromManager::BroadcastRootResponse(sv_code, id, list_queues)) => {
+        Some(FromManager::BroadcastRootResponse(sv_code, list_queues)) => {
             if sv_code == ServerResponse::Denied {
                 debug!("Client {:?} - Main Thread: Broadcast Root Error", client_id);
             } else {
-                broadcast_root_operation(id, client_id, stream, list_queues.unwrap())
+                broadcast_root_operation(client_id, stream, list_queues.unwrap())
                     .await
                     .unwrap();
             }
@@ -266,7 +251,7 @@ async fn protocol_from_manager(
             if sv_code == ServerResponse::Denied {
                 debug!("Client {:?} - Main Thread: Not enough queues", client_id);
             } else {
-                receive_operation(
+                broadcast_operation(
                     client_id,
                     ClientOperation::BroadcastRoot,
                     stream,
@@ -342,10 +327,9 @@ async fn identify_operation(
 }
 
 async fn send_operation(
-    id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Arc<Message>>>,
+    queue: Arc<Sender<Arc<Vec<u8>>>>,
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -354,16 +338,7 @@ async fn send_operation(
 
     match stream.read_exact(&mut buffer).await {
         Ok(_) => {
-            let message = Message::new(
-                id,
-                client_id,
-                ClientOperation::Send,
-                0,
-                true,
-                total_bytes,
-                buffer,
-            );
-            queue.push(Arc::new(message));
+            let _ = queue.send(Arc::new(buffer)).await;
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");
@@ -396,17 +371,16 @@ async fn receive_operation(
     client_id: u32,
     _op_id: ClientOperation,
     stream: &mut TcpStream,
-    queue: Arc<Queue<Arc<Message>>>,
+    queue: Arc<Mutex<Receiver<Arc<Vec<u8>>>>>,
 ) -> Result<(), Box<dyn Error>> {
-    let message = queue.pop().await;
+    let message = queue.lock().await.recv().await.unwrap();
 
     //Send header
-    stream.write_u32(message.all_mess_len).await?;
+    stream.write_u32(message.len() as u32).await?;
     stream.flush().await.unwrap();
 
     // Send data to Client
-    stream.write_all(&message.bytes).await.unwrap();
-
+    stream.write_all(&message).await.unwrap();
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
@@ -425,10 +399,9 @@ async fn receive_operation(
 }
 
 async fn broadcast_root_operation(
-    id: u32,
     client_id: u32,
     stream: &mut TcpStream,
-    list_queues: Vec<Arc<Queue<Arc<Message>>>>
+    queue: Arc<Sender<Arc<Vec<u8>>>>,
 ) -> Result<(), Box<dyn Error>> {
     // Get header
     let total_bytes = stream.read_u32().await.unwrap();
@@ -437,21 +410,7 @@ async fn broadcast_root_operation(
 
     match stream.read_exact(&mut buffer).await {
         Ok(_) => {
-            let message = Message::new(
-                id,
-                client_id,
-                ClientOperation::Send,
-                0,
-                true,
-                total_bytes,
-                buffer,
-            );
-
-            let message_ref = Arc::new(message);
-
-            for queue in list_queues {
-                queue.push(message_ref.clone());
-            }
+            let _ = queue.send(Arc::new(buffer)).await;
         }
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             //debug!("Err: TCP -> SV (Write))");
@@ -475,7 +434,38 @@ async fn broadcast_root_operation(
         .write_u32(ServerResponse::Accepted as u32)
         .await
         .unwrap();
-    stream.flush().await.unwrap(); 
+    stream.flush().await.unwrap();
+
+    Ok(())
+}
+
+async fn broadcast_operation(
+    client_id: u32,
+    _op_id: ClientOperation,
+    stream: &mut TcpStream,
+    queue: Arc<Mutex<Receiver<Arc<Vec<u8>>>>>,
+) -> Result<(), Box<dyn Error>> {
+    let message = queue.lock().await.recv().await.unwrap();
+
+    //Send header
+    stream.write_u32(message.len() as u32).await?;
+    stream.flush().await.unwrap();
+
+    // Send data to Client
+    stream.write_all(&message).await.unwrap();
+
+    debug!(
+        "Client {:?} - Main thread: Receive Operation completed",
+        client_id
+    );
+
+    // Get response from Client
+    let conf_code = stream.read_u32().await.unwrap();
+
+    debug!(
+        "Client {:?} - Main thread: Operation response: {:?}",
+        client_id, conf_code
+    );
 
     Ok(())
 }

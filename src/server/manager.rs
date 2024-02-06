@@ -4,27 +4,20 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
 use crate::protocol::ServerResponse;
 use crate::server::enums::{FromManager, ToManager};
-use crate::server::message::Message;
-
-type TaskQueue = deadqueue::unlimited::Queue<Arc<Message>>;
 
 pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Error>> {
     // Creating HashMap to store clients and queues
     let mut clients_store: HashMap<u32, Sender<FromManager>> = HashMap::new();
-    let mut queues_store: HashMap<u32, Arc<deadqueue::unlimited::Queue<Arc<Message>>>> = HashMap::new();
-    let mut broadcast_groups: HashMap<
-        String,
-        HashMap<u32, Arc<deadqueue::unlimited::Queue<Arc<Message>>>>,
-    > = HashMap::new();
-    let bgroup_counter: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
-
-    let send_counter: Mutex<u32> = Mutex::new(0);
-    let broadcast_counter: Mutex<u32> = Mutex::new(0);
+    let mut send_store: HashMap<u32, Arc<Sender<Arc<Vec<u8>>>>> = HashMap::new();
+    let mut recv_store: HashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> = HashMap::new();
+    let mut broadcast_send_store: HashMap<String, Arc<Sender<Arc<Vec<u8>>>>> = HashMap::new();
+    let mut broadcast_recv_store: HashMap<String, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> =
+        HashMap::new();
 
     loop {
         match receiver.recv().await {
@@ -35,7 +28,7 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
 
                 // Register client
 
-                if find_key(client_id, &clients_store) {
+                if clients_store.contains_key(&client_id) {
                     debug!("Manager Thread: Client is already registered");
                     cc_copy
                         .send(FromManager::Accept(ServerResponse::Denied))
@@ -52,10 +45,12 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
                 for name in queues {
-                    if find_key(name, &queues_store) {
+                    if send_store.contains_key(&name) {
                         debug!("Manager Thread: Queue id is already registered");
                     } else {
-                        queues_store.insert(name, Arc::new(TaskQueue::new()));
+                        let (send, recv) = mpsc::channel(1024 * 1024);
+                        send_store.insert(name, Arc::new(send));
+                        recv_store.insert(name, Arc::new(Mutex::new(recv)));
                     }
                 }
 
@@ -63,23 +58,15 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                     .send(FromManager::InitQueuesResponse(ServerResponse::Accepted))
                     .await?;
             }
-            Some(ToManager::CreateBroadcastGroup(client_id, group_name, n_queues)) => {
+            Some(ToManager::CreateBroadcastGroup(client_id, group_name, _n_queues)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
-                if broadcast_groups.contains_key(&group_name) {
+                if broadcast_send_store.contains_key(&group_name) {
                     debug!("Manager Thread: Broadcast Group is already registered");
                 } else {
-                    let mut bc_hashmap: HashMap<u32, Arc<deadqueue::unlimited::Queue<Arc<Message>>>> =
-                        HashMap::new();
-
-                    for i in 0..n_queues {
-                        bc_hashmap.insert(i, Arc::new(TaskQueue::new()));
-                    }
-
-                    broadcast_groups.insert(group_name.clone(), bc_hashmap);
-                    let mut bgroup_hashmap = bgroup_counter.lock().await;
-                    bgroup_hashmap.insert(group_name, 0);
-                    drop(bgroup_hashmap);
+                    let (send, recv) = mpsc::channel(1024 * 1024);
+                    broadcast_send_store.insert(group_name.clone(), Arc::new(send));
+                    broadcast_recv_store.insert(group_name, Arc::new(Mutex::new(recv)));
                 }
 
                 client_channel
@@ -91,24 +78,18 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::SendRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match queues_store.get(&queue_id) {
+                match send_store.get(&queue_id) {
                     Some(queue) => {
-                        let mut send_id = send_counter.lock().await;
-
                         client_channel
                             .send(FromManager::SendResponse(
                                 ServerResponse::Accepted,
-                                *send_id,
                                 Some(queue.clone()),
                             ))
                             .await?;
-
-                        *send_id += 1;
-                        drop(send_id);
                     }
                     None => {
                         client_channel
-                            .send(FromManager::SendResponse(ServerResponse::Denied, 0, None))
+                            .send(FromManager::SendResponse(ServerResponse::Denied, None))
                             .await?;
                     }
                 }
@@ -116,7 +97,7 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::ReceiveRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match queues_store.get(&queue_id) {
+                match recv_store.get(&queue_id) {
                     Some(queue) => {
                         client_channel
                             .send(FromManager::ReceiveResponse(
@@ -135,31 +116,19 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::BroadcastRootRequest(client_id, group_name)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                let mut all_queues: Vec<Arc<deadqueue::unlimited::Queue<Arc<Message>>>> = Vec::new();
-
-                match broadcast_groups.get(&group_name) {
-                    Some(bc_group) => {
-                        for (_key, value) in bc_group {
-                            all_queues.push(value.clone());
-                        }
-
-                        let mut bc_id = broadcast_counter.lock().await;
+                match broadcast_send_store.get(&group_name) {
+                    Some(queue) => {
                         client_channel
                             .send(FromManager::BroadcastRootResponse(
                                 ServerResponse::Accepted,
-                                *bc_id,
-                                Some(all_queues),
+                                Some(queue.clone()),
                             ))
                             .await?;
-
-                        *bc_id += 1;
-                        drop(bc_id);
                     }
                     None => {
                         client_channel
                             .send(FromManager::BroadcastRootResponse(
                                 ServerResponse::Denied,
-                                0,
                                 None,
                             ))
                             .await?;
@@ -169,39 +138,14 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::BroadcastRequest(client_id, group_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match broadcast_groups.get(&group_id) {
-                    Some(hashmap_group) => {
-                        let mut bgroup_hashmap = bgroup_counter.lock().await;
-                        let counter = bgroup_hashmap.get_mut(&group_id).unwrap();
-                        let actual_counter = *counter;
-                        *counter += 1;
-                        if *counter == hashmap_group.len() as u32 {
-                            *counter = 0;
-                        }
-                        drop(bgroup_hashmap);
-
-                        match hashmap_group.get(&actual_counter) {
-                            Some(queue) => {
-                                client_channel
-                                    .send(FromManager::BroadcastResponse(
-                                        ServerResponse::Accepted,
-                                        Some(queue.clone()),
-                                    ))
-                                    .await?;
-                            }
-                            None => {
-                                debug!("Manager Thread: Error: The number of requests is greater than the number of queues!");
-                                client_channel
-                                    .send(FromManager::BroadcastResponse(
-                                        ServerResponse::Denied,
-                                        None,
-                                    ))
-                                    .await?;
-                                let mut bgroup_hashmap = bgroup_counter.lock().await;
-                                *bgroup_hashmap.get_mut(&group_id).unwrap() = 0;
-                                drop(bgroup_hashmap);
-                            }
-                        }
+                match broadcast_recv_store.get(&group_id) {
+                    Some(queue) => {
+                        client_channel
+                            .send(FromManager::BroadcastResponse(
+                                ServerResponse::Accepted,
+                                Some(queue.clone()),
+                            ))
+                            .await?;
                     }
                     None => {
                         client_channel
@@ -221,18 +165,4 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
         }
     }
     //Ok(())
-}
-
-fn find_key<K: std::cmp::PartialEq<u32>, V>(key_to_find: u32, hashmap: &HashMap<K, V>) -> bool {
-    if hashmap.is_empty() {
-        return false;
-    } else {
-        for (key, _value) in hashmap {
-            if *key == key_to_find {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

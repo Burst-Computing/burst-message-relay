@@ -1,14 +1,14 @@
 use log::debug;
 
 use simple_pool::ResourcePoolGuard;
+use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use std::sync::Arc;
 
+use crate::client::connection_pool::ConnectionPool;
 use crate::config::ClientConfig;
 use crate::protocol::{ClientOperation, ServerResponse};
-use crate::client::connection_pool::ConnectionPool;
 
 pub struct Client {
     connection_pool: Arc<ConnectionPool>,
@@ -36,7 +36,7 @@ impl Client {
             n_queues,
         )
         .await
-    } 
+    }
 
     pub async fn send(&mut self, queue_id: u32, data: &[u8]) -> u32 {
         self.write_tcp(ClientOperation::Send, Some(queue_id), None, data)
@@ -80,7 +80,7 @@ impl Client {
             Some(group_name.as_bytes()),
         )
         .await
-    } 
+    }
 
     async fn identify_operation(
         stream: &mut ResourcePoolGuard<TcpStream>,
@@ -169,7 +169,7 @@ impl Client {
         drop(stream);
 
         response
-    } 
+    }
 
     async fn write_tcp(
         &mut self,

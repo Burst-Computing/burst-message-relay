@@ -3,9 +3,9 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 
-use crate::server::client;
 use crate::server::enums::ToManager;
 use crate::server::manager;
+use crate::server::worker;
 
 pub struct Server {
     tcp_socket: TcpListener,
@@ -30,7 +30,7 @@ impl Server {
 
     pub async fn start_manager(&self) -> Sender<ToManager> {
         // Create channel to communicate Clients Threads between Manager Server
-        let (manager_sender, manager_receiver) = mpsc::channel(1024);
+        let (manager_sender, manager_receiver) = mpsc::channel(1024 * 1024);
 
         // Start Manager thread
         tokio::spawn(async move {
@@ -52,7 +52,7 @@ impl Server {
                 // Start Client thread
                 tokio::spawn(async move {
                     //println!("Client thread spawned");
-                    client::process_task(id, tcp_stream, manager_sender)
+                    worker::worker_task(id, tcp_stream, manager_sender)
                         .await
                         .expect("Client Connection Failed");
                 });
