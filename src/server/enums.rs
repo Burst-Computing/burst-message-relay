@@ -4,6 +4,8 @@ use crate::protocol::ServerResponse;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 
+use crate::server::message::Message;
+
 pub enum ToManager {
     Register(u32, Sender<FromManager>),
     InitQueues(u32, Vec<u32>),
@@ -19,8 +21,8 @@ pub enum FromManager {
     Accept(ServerResponse),
     InitQueuesResponse(ServerResponse),
     CreateBroadcastGroupResponse(ServerResponse),
-    SendResponse(ServerResponse, Option<Arc<Sender<Arc<Vec<u8>>>>>),
-    ReceiveResponse(ServerResponse, Option<Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>),
+    SendResponse(ServerResponse, Option<Arc<Sender<Arc<Message>>>>),
+    ReceiveResponse(ServerResponse, Option<Arc<Mutex<Receiver<Arc<Message>>>>>),
     BroadcastRootResponse(ServerResponse, Option<Arc<Sender<Arc<Vec<u8>>>>>),
     BroadcastResponse(ServerResponse, Option<Arc<Mutex<Receiver<Arc<Vec<u8>>>>>>),
     Close(),

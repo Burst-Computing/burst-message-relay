@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
+use super::message::Message;
+
 pub async fn worker_task(
     client_id: u32,
     mut stream: TcpStream,
@@ -32,8 +34,7 @@ pub async fn worker_task(
     while alive {
         debug!("Client {:?} - Main thread: Checking Operation", client_id);
 
-        let (_sv_code, operation_id, queue_id, group_name) =
-            identify_operation(client_id, &mut stream).await;
+        let (operation_id, queue_id, group_name) = identify_operation(client_id, &mut stream).await;
 
         // Sv_code -> TO DO
 
@@ -67,7 +68,7 @@ pub async fn worker_task(
                     client_id,
                     &mut stream,
                     operation_id,
-                    group_name,
+                    None,
                 )
                 .await;
             }
@@ -281,13 +282,15 @@ async fn protocol_from_manager(
 async fn identify_operation(
     client_id: u32,
     stream: &mut TcpStream,
-) -> (ServerResponse, ClientOperation, Option<u32>, Option<String>) {
+) -> (ClientOperation, Option<u32>, Option<String>) {
     // Identify operation from Client
-    let op_id: ClientOperation = stream.read_u32().await.unwrap().into();
+    let mut buffer: Vec<u8> = vec![0; 4 as usize];
+    stream.read_exact(&mut buffer).await.unwrap();
+    let op_id: ClientOperation = u32::from_be_bytes(buffer[0..4].try_into().unwrap()).into();
 
     let mut queue_id = None;
     let mut group_name_op = None;
-    if op_id == ClientOperation::Send || op_id == ClientOperation::Receive {
+    /* if op_id == ClientOperation::Send || op_id == ClientOperation::Receive {
         queue_id = Some(stream.read_u32().await.unwrap());
     } else if op_id == ClientOperation::CreateBcGroup
         || op_id == ClientOperation::BroadcastRoot
@@ -296,17 +299,21 @@ async fn identify_operation(
         let mut group_name = Vec::new();
         stream.read_buf(&mut group_name).await.unwrap();
         group_name_op = Some(String::from_utf8(group_name).unwrap());
-    }
+    } */
+
+    let mut buffer: Vec<u8> = vec![0; 4 as usize];
+    stream.read_exact(&mut buffer).await.unwrap();
+    queue_id = Some(u32::from_be_bytes(buffer[0..4].try_into().unwrap()));
 
     debug!(
         "Client {:?} - Main thread: Operation ID: {:?}",
         client_id, op_id
     );
 
-    let mut sv_code = ServerResponse::Denied;
+    //let mut sv_code = ServerResponse::Denied;
 
     // Check operation
-    if op_id == ClientOperation::InitQueue
+    /*if op_id == ClientOperation::InitQueue
         || op_id == ClientOperation::CreateBcGroup
         || op_id == ClientOperation::Send
         || op_id == ClientOperation::Receive
@@ -321,31 +328,50 @@ async fn identify_operation(
     if op_id != ClientOperation::Close {
         stream.write_u32(sv_code as u32).await.unwrap();
         stream.flush().await.unwrap();
-    }
+    } */
 
-    (sv_code.into(), op_id.into(), queue_id, group_name_op)
+    (op_id.into(), queue_id, group_name_op)
 }
 
 async fn send_operation(
     client_id: u32,
     stream: &mut TcpStream,
-    queue: Arc<Sender<Arc<Vec<u8>>>>,
+    queue: Arc<Sender<Arc<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     // Get header
-    let total_bytes = stream.read_u32().await.unwrap();
+    let mut buffer: Vec<u8> = vec![0; 4 as usize];
+    stream.read_exact(&mut buffer).await.unwrap();
+    let total_bytes = u32::from_be_bytes(buffer[0..4].try_into().unwrap());
 
-    let mut buffer: Vec<u8> = vec![0; total_bytes as usize];
+    let capacity = 1024 * 1024;
 
-    match stream.read_exact(&mut buffer).await {
-        Ok(_) => {
-            let _ = queue.send(Arc::new(buffer)).await;
-        }
-        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            //debug!("Err: TCP -> SV (Write))");
-        }
-        Err(e) => {
-            return Err(e.into());
-        }
+    let iterations = total_bytes / capacity;
+
+    let mut n_chunks = iterations;
+
+    let mut last_buffer = 0;
+    if total_bytes % capacity != 0{
+        last_buffer = total_bytes % capacity;
+        n_chunks += 1;
+        
+    }
+
+    for chunk_id in 0..iterations {
+        let mut buffer: Vec<u8> = vec![0; capacity as usize];
+        stream.read_exact(&mut buffer).await.unwrap();
+
+        let msg = Message::new(client_id, ClientOperation::Send, chunk_id, n_chunks, total_bytes, buffer);
+
+        let _ = queue.send(Arc::new(msg)).await;
+    }  
+
+    if last_buffer != 0 {
+        let mut buffer: Vec<u8> = vec![0; last_buffer as usize];
+        stream.read_exact(&mut buffer).await.unwrap();
+
+        let msg = Message::new(client_id, ClientOperation::Send, iterations + 1, n_chunks, total_bytes, buffer);
+
+        let _ = queue.send(Arc::new(msg)).await;
     }
 
     debug!(
@@ -371,28 +397,28 @@ async fn receive_operation(
     client_id: u32,
     _op_id: ClientOperation,
     stream: &mut TcpStream,
-    queue: Arc<Mutex<Receiver<Arc<Vec<u8>>>>>,
+    queue: Arc<Mutex<Receiver<Arc<Message>>>>,
 ) -> Result<(), Box<dyn Error>> {
+
     let message = queue.lock().await.recv().await.unwrap();
 
-    //Send header
-    stream.write_u32(message.len() as u32).await?;
-    stream.flush().await.unwrap();
+    let n_chunks = message.n_chunks;
 
-    // Send data to Client
-    stream.write_all(&message).await.unwrap();
+    let first_message = [&message.all_mess_len.to_be_bytes(), &*message.bytes].concat();
+
+    stream.write_all(&first_message).await?;
+
+    for _ in 0..(n_chunks - 1) {
+        let message = queue.lock().await.recv().await.unwrap();
+        stream.write_all(&message.bytes).await.unwrap();
+
+    }
+
+    stream.flush().await.unwrap();
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
         client_id
-    );
-
-    // Get response from Client
-    let conf_code = stream.read_u32().await.unwrap();
-
-    debug!(
-        "Client {:?} - Main thread: Operation response: {:?}",
-        client_id, conf_code
     );
 
     Ok(())

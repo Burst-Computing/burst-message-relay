@@ -53,7 +53,7 @@ impl Client {
             .await
     }
 
-    pub async fn broadcast_root(&mut self, group_name: &str, data: &[u8]) -> u32 {
+    /* pub async fn broadcast_root(&mut self, group_name: &str, data: &[u8]) -> u32 {
         self.write_tcp(
             ClientOperation::BroadcastRoot,
             None,
@@ -61,7 +61,7 @@ impl Client {
             data,
         )
         .await
-    }
+    } */
 
     pub async fn broadcast_root_refs(&mut self, group_name: &str, data: &[&[u8]]) -> u32 {
         self.write_tcp_refs(
@@ -73,14 +73,14 @@ impl Client {
         .await
     }
 
-    pub async fn broadcast(&mut self, group_name: &str) -> Vec<u8> {
+    /* pub async fn broadcast(&mut self, group_name: &str) -> Vec<u8> {
         self.read_tcp(
             ClientOperation::Broadcast,
             None,
             Some(group_name.as_bytes()),
         )
         .await
-    }
+    } */
 
     async fn identify_operation(
         stream: &mut ResourcePoolGuard<TcpStream>,
@@ -182,44 +182,48 @@ impl Client {
 
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol, queue_id, group_name).await
-            == ServerResponse::Accepted
-        {
-            // Header
-            let len;
-            if protocol == ClientOperation::InitQueue || protocol == ClientOperation::CreateBcGroup
-            {
-                len = (data.len() / 4) as u32;
-            } else {
-                len = data.len() as u32;
-            }
+        let protocol_bytes: &[u8] = &(protocol as u32).to_be_bytes();
+        let queue_id_bytes: &[u8] = &queue_id.unwrap().to_be_bytes();
+        let header: &[u8] = &(data.len() as u32).to_be_bytes();
 
-            stream.write_u32(len).await.unwrap();
+        let all_data = [protocol_bytes, queue_id_bytes, header, data].concat();
 
-            let iterations = data.len() / self.config.send_buffer_capacity;
+        stream.write_all(&all_data).await.unwrap();
+        stream.flush().await.unwrap();
 
-            if iterations > 0 {
-                for i in 0..iterations {
-                    stream
-                        .write_all(
-                            &data[self.config.send_buffer_capacity * i
-                                ..self.config.send_buffer_capacity * (i + 1)],
-                        )
-                        .await
-                        .unwrap();
-                }
+        // Header
+        /* let len;
+        if protocol == ClientOperation::InitQueue || protocol == ClientOperation::CreateBcGroup {
+            len = (data.len() / 4) as u32;
+        } else {
+            len = data.len() as u32;
+        } */
 
+        /* stream.write_u32(len).await.unwrap();
+
+        let iterations = data.len() / self.config.send_buffer_capacity;
+
+        if iterations > 0 {
+            for i in 0..iterations {
                 stream
-                    .write_all(&data[self.config.send_buffer_capacity * iterations..data.len()])
+                    .write_all(
+                        &data[self.config.send_buffer_capacity * i
+                            ..self.config.send_buffer_capacity * (i + 1)],
+                    )
                     .await
                     .unwrap();
-            } else {
-                stream.write_all(&data).await.unwrap();
             }
-            stream.flush().await.unwrap();
 
-            response = stream.read_u32().await.unwrap();
+            stream
+                .write_all(&data[self.config.send_buffer_capacity * iterations..data.len()])
+                .await
+                .unwrap();
+        } else {
+            stream.write_all(&data).await.unwrap();
         }
+        stream.flush().await.unwrap();*/
+
+        response = stream.read_u32().await.unwrap();
 
         drop(stream);
 
@@ -293,35 +297,33 @@ impl Client {
         queue_id: Option<u32>,
         group_name: Option<&[u8]>,
     ) -> Vec<u8> {
-        let mut buffer = vec![0; 0];
-
         let mut stream = self.connection_pool.get_connection().await;
 
-        if Self::identify_operation(&mut stream, protocol, queue_id, group_name).await
-            == ServerResponse::Accepted
-        {
-            // Get header
-            let total_bytes = stream.read_u32().await.unwrap();
+        let protocol_bytes: &[u8] = &(protocol as u32).to_be_bytes();
+        let queue_id_bytes: &[u8] = &queue_id.unwrap().to_be_bytes();
 
-            buffer = vec![0; total_bytes as usize];
+        let all_data = [protocol_bytes, queue_id_bytes].concat();
 
-            match stream.read_exact(&mut buffer).await {
-                Ok(n) => {
-                    debug!("Client read {:?} bytes", n);
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    //debug!("Err: TCP -> SV (Write))");
-                }
-                Err(e) => {
-                    debug!("Error: {:?}", e);
-                }
+        stream.write_all(&all_data).await.unwrap();
+        stream.flush().await.unwrap();
+
+        // Get header
+        let mut buffer: Vec<u8> = vec![0; 4 as usize];
+        stream.read_exact(&mut buffer).await.unwrap();
+        let total_bytes = u32::from_be_bytes(buffer[0..4].try_into().unwrap());
+
+        buffer = vec![0; total_bytes as usize];
+
+        match stream.read_exact(&mut buffer).await {
+            Ok(n) => {
+                debug!("Client read {:?} bytes", n);
             }
-
-            stream
-                .write_u32(ServerResponse::Accepted as u32)
-                .await
-                .unwrap();
-            stream.flush().await.unwrap();
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                //debug!("Err: TCP -> SV (Write))");
+            }
+            Err(e) => {
+                debug!("Error: {:?}", e);
+            }
         }
 
         drop(stream);
