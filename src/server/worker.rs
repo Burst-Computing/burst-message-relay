@@ -143,42 +143,6 @@ pub async fn worker_task(
     Ok(())
 }
 
-async fn init_operation(
-    receiver: &mut Receiver<FromManager>,
-    sender: &Sender<ToManager>,
-    client_id: u32,
-    stream: &mut TcpStream,
-    operation_id: ClientOperation,
-    group_name: Option<String>,
-) -> bool {
-    //Read from tcp
-    let header = stream.read_u32().await.unwrap();
-
-    //Send to Manager
-    if operation_id == ClientOperation::InitQueue {
-        let mut queues: Vec<u32> = Vec::with_capacity(header.try_into().unwrap());
-
-        //Header contains number of queues
-        let mut n = 0;
-        while n < header {
-            queues.push(stream.read_u32().await.unwrap());
-            n += 1;
-        }
-
-        let init_operation = ToManager::InitQueues(client_id, queues);
-        sender.send(init_operation).await.unwrap();
-    } else if operation_id == ClientOperation::CreateBcGroup {
-        let create_bc_operation =
-            ToManager::CreateBroadcastGroup(client_id, group_name.unwrap(), header);
-        sender.send(create_bc_operation).await.unwrap();
-    } else {
-        debug!("Unreachable!");
-    }
-
-    //Read from Manager
-    protocol_from_manager(receiver, client_id, stream).await
-}
-
 async fn protocol_from_manager(
     receiver: &mut Receiver<FromManager>,
     client_id: u32,
@@ -323,6 +287,42 @@ async fn identify_operation(
     }
 
     (sv_code.into(), op_id.into(), queue_id, group_name_op)
+}
+
+async fn init_operation(
+    receiver: &mut Receiver<FromManager>,
+    sender: &Sender<ToManager>,
+    client_id: u32,
+    stream: &mut TcpStream,
+    operation_id: ClientOperation,
+    group_name: Option<String>,
+) -> bool {
+    //Read from tcp
+    let header = stream.read_u32().await.unwrap();
+
+    //Send to Manager
+    if operation_id == ClientOperation::InitQueue {
+        let mut queues: Vec<u32> = Vec::with_capacity(header.try_into().unwrap());
+
+        //Header contains number of queues
+        let mut n = 0;
+        while n < header {
+            queues.push(stream.read_u32().await.unwrap());
+            n += 1;
+        }
+
+        let init_operation = ToManager::InitQueues(client_id, queues);
+        sender.send(init_operation).await.unwrap();
+    } else if operation_id == ClientOperation::CreateBcGroup {
+        let create_bc_operation =
+            ToManager::CreateBroadcastGroup(client_id, group_name.unwrap(), header);
+        sender.send(create_bc_operation).await.unwrap();
+    } else {
+        debug!("Unreachable!");
+    }
+
+    //Read from Manager
+    protocol_from_manager(receiver, client_id, stream).await
 }
 
 async fn send_operation(
