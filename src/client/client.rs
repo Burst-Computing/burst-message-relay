@@ -89,18 +89,16 @@ impl Client {
         group_name: Option<&[u8]>,
     ) -> ServerResponse {
         stream.write_u32(op_id as u32).await.unwrap();
-        stream.flush().await.unwrap();
 
         if op_id == ClientOperation::Send || op_id == ClientOperation::Receive {
             stream.write_u32(queue_id.unwrap()).await.unwrap();
-            stream.flush().await.unwrap();
         } else if op_id == ClientOperation::CreateBcGroup
             || op_id == ClientOperation::BroadcastRoot
             || op_id == ClientOperation::Broadcast
         {
             stream.write_all(group_name.unwrap()).await.unwrap();
-            stream.flush().await.unwrap();
         }
+        stream.flush().await.unwrap();
 
         let sv_code = stream.read_u32().await.unwrap();
 
@@ -130,12 +128,12 @@ impl Client {
             let len = queues.len() as u32;
 
             stream.write_u32(len).await.unwrap();
-            stream.flush().await.unwrap();
 
             for slice in queues {
                 stream.write_u32(*slice).await.unwrap();
-                stream.flush().await.unwrap();
             }
+            stream.flush().await.unwrap();
+
 
             response = stream.read_u32().await.unwrap();
         }
@@ -248,7 +246,6 @@ impl Client {
 
             //Send total len
             stream.write_u32(len).await.unwrap();
-            stream.flush().await.unwrap();
 
             for slice in data {
                 let iterations = slice.len() / self.config.send_buffer_capacity;
@@ -264,7 +261,6 @@ impl Client {
                             )
                             .await
                             .unwrap();
-                        stream.flush().await.unwrap();
                     }
 
                     let iter = iterations as usize;
@@ -272,12 +268,12 @@ impl Client {
                         .write_all(&slice[self.config.send_buffer_capacity * iter..slice.len()])
                         .await
                         .unwrap();
-                    stream.flush().await.unwrap();
                 } else {
                     stream.write_all(slice).await.unwrap();
-                    stream.flush().await.unwrap();
                 }
             }
+
+            stream.flush().await.unwrap();
 
             response = stream.read_u32().await.unwrap();
         }

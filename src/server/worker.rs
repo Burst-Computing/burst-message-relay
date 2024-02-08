@@ -320,7 +320,6 @@ async fn identify_operation(
     // Send sv_code to Client
     if op_id != ClientOperation::Close {
         stream.write_u32(sv_code as u32).await.unwrap();
-        stream.flush().await.unwrap();
     }
 
     (sv_code.into(), op_id.into(), queue_id, group_name_op)
@@ -377,10 +376,10 @@ async fn receive_operation(
 
     //Send header
     stream.write_u32(message.len() as u32).await?;
-    stream.flush().await.unwrap();
 
     // Send data to Client
     stream.write_all(&message).await.unwrap();
+    stream.flush().await.unwrap();
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
@@ -449,10 +448,11 @@ async fn broadcast_operation(
 
     //Send header
     stream.write_u32(message.len() as u32).await?;
-    stream.flush().await.unwrap();
 
     // Send data to Client
     stream.write_all(&message).await.unwrap();
+    stream.flush().await.unwrap();
+
 
     debug!(
         "Client {:?} - Main thread: Receive Operation completed",
