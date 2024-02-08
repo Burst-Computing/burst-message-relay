@@ -15,9 +15,8 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
     let mut clients_store: HashMap<u32, Sender<FromManager>> = HashMap::new();
     let mut send_store: HashMap<u32, Arc<Sender<Arc<Vec<u8>>>>> = HashMap::new();
     let mut recv_store: HashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> = HashMap::new();
-    let mut broadcast_send_store: HashMap<String, Arc<Sender<Arc<Vec<u8>>>>> = HashMap::new();
-    let mut broadcast_recv_store: HashMap<String, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> =
-        HashMap::new();
+    let mut broadcast_send_store: HashMap<u32, Arc<Sender<Arc<Vec<u8>>>>> = HashMap::new();
+    let mut broadcast_recv_store: HashMap<u32, Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> = HashMap::new();
 
     loop {
         match receiver.recv().await {
@@ -41,23 +40,6 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
                 let acc = FromManager::Accept(ServerResponse::Accepted);
                 cc_copy.send(acc).await?;
             }
-            Some(ToManager::InitQueues(client_id, queues)) => {
-                let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
-
-                for name in queues {
-                    if send_store.contains_key(&name) {
-                        debug!("Manager Thread: Queue id is already registered");
-                    } else {
-                        let (send, recv) = mpsc::channel(1024 * 1024);
-                        send_store.insert(name, Arc::new(send));
-                        recv_store.insert(name, Arc::new(Mutex::new(recv)));
-                    }
-                }
-
-                client_channel
-                    .send(FromManager::InitQueuesResponse(ServerResponse::Accepted))
-                    .await?;
-            }
             Some(ToManager::CreateBroadcastGroup(client_id, group_name, _n_queues)) => {
                 let client_channel: &Sender<FromManager> = clients_store.get(&client_id).unwrap();
 
@@ -78,40 +60,56 @@ pub async fn start(mut receiver: Receiver<ToManager>) -> Result<(), Box<dyn Erro
             Some(ToManager::SendRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match send_store.get(&queue_id) {
-                    Some(queue) => {
-                        client_channel
-                            .send(FromManager::SendResponse(
-                                ServerResponse::Accepted,
-                                Some(queue.clone()),
-                            ))
-                            .await?;
-                    }
-                    None => {
-                        client_channel
-                            .send(FromManager::SendResponse(ServerResponse::Denied, None))
-                            .await?;
-                    }
+                let mut exists = true;
+                let mut queue: Option<Arc<Sender<Arc<Vec<u8>>>>> = None;
+
+                if !send_store.contains_key(&queue_id) {
+                    let (send_channel, recv_channel) = mpsc::channel(1024 * 1024);
+                    let send_queue = Arc::new(send_channel);
+                    send_store.insert(queue_id.clone(), send_queue.clone());
+                    recv_store.insert(queue_id.clone(), Arc::new(Mutex::new(recv_channel)));
+                    exists = false;
+                    queue = Some(send_queue);
                 }
+
+                // Get queue
+                if exists {
+                    queue = Some(send_store.get(&queue_id).unwrap().clone());
+                }
+
+                client_channel
+                    .send(FromManager::SendResponse(
+                        ServerResponse::Accepted,
+                        Some(queue.unwrap().clone()),
+                    ))
+                    .await?;
             }
             Some(ToManager::ReceiveRequest(client_id, queue_id)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
 
-                match recv_store.get(&queue_id) {
-                    Some(queue) => {
-                        client_channel
-                            .send(FromManager::ReceiveResponse(
-                                ServerResponse::Accepted,
-                                Some(queue.clone()),
-                            ))
-                            .await?;
-                    }
-                    None => {
-                        client_channel
-                            .send(FromManager::ReceiveResponse(ServerResponse::Denied, None))
-                            .await?;
-                    }
+                let mut exists = true;
+                let mut queue: Option<Arc<Mutex<Receiver<Arc<Vec<u8>>>>>> = None;
+
+                if !send_store.contains_key(&queue_id) {
+                    let (send_channel, recv_channel) = mpsc::channel(1024 * 1024);
+                    let recv_queue = Arc::new(Mutex::new(recv_channel));
+                    send_store.insert(queue_id.clone(), Arc::new(send_channel));
+                    recv_store.insert(queue_id.clone(), recv_queue.clone());
+                    exists = false;
+                    queue = Some(recv_queue);
                 }
+
+                // Get queue
+                if exists {
+                    queue = Some(recv_store.get(&queue_id).unwrap().clone());
+                }
+
+                client_channel
+                    .send(FromManager::ReceiveResponse(
+                        ServerResponse::Accepted,
+                        Some(queue.unwrap().clone()),
+                    ))
+                    .await?;
             }
             Some(ToManager::BroadcastRootRequest(client_id, group_name)) => {
                 let client_channel = clients_store.get(&client_id).unwrap();
