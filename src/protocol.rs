@@ -2,7 +2,6 @@ use std::fmt::Display;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ClientOperation {
-    InitQueue,
     CreateBcGroup,
     Send,
     Receive,
@@ -21,13 +20,12 @@ impl Display for ClientOperation {
 impl From<u32> for ClientOperation {
     fn from(n: u32) -> Self {
         match n {
-            0 => ClientOperation::InitQueue,
-            1 => ClientOperation::CreateBcGroup,
-            2 => ClientOperation::Send,
-            3 => ClientOperation::Receive,
-            4 => ClientOperation::BroadcastRoot,
-            5 => ClientOperation::Broadcast,
-            6 => ClientOperation::Close,
+            0 => ClientOperation::CreateBcGroup,
+            1 => ClientOperation::Send,
+            2 => ClientOperation::Receive,
+            3 => ClientOperation::BroadcastRoot,
+            4 => ClientOperation::Broadcast,
+            5 => ClientOperation::Close,
             _ => ClientOperation::Error,
         }
     }
