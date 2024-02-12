@@ -1,44 +1,25 @@
-use burst_message_relay::{client::client::Client, config::ClientConfig};
+use std::error::Error;
+
+use burst_message_relay::client::{connection_pool::ConnectionPool, client::Client};
+use std::sync::Arc;
 
 #[tokio::main]
-pub async fn main() -> std::io::Result<()> {
-    let mut client = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client.connect().await;
+async fn main() -> Result<(), Box<dyn Error>> {
 
-    let queues = vec![0, 1];
+    let connection_pool = Arc::new(ConnectionPool::new("127.0.0.1:8000", 1));
+    connection_pool.initialize_conns().await;
 
-    let code = client.init_queues(&queues).await;
+    let mut client = Client::new(connection_pool.clone());
 
-    println!("Init_queues Code: {:?}", code);
+    let random_bytes = vec![1; 1024 * 1024];
 
-    client.close().await;
+    let code = client.send(0, &random_bytes).await;
+    println!("Send Code: {:?}", code);
 
-    let mut client_1 = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client_1.connect().await;
+    let buf = client.recv(0).await;
+    println!("Data: {:?}", buf.len());
 
-    let mut client_2 = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client_2.connect().await;
-
-    let task = tokio::spawn(async move {
-        let random_bytes = vec![1; 268435456 * 2];
-
-        let code = client_1.send(0, &random_bytes).await;
-
-        println!("Thread 1: Send Code: {:?}", code);
-
-        client_1.close().await;
-    });
-
-    let task2 = tokio::spawn(async move {
-        let buf = client_2.recv(0).await;
-
-        println!("Thread 2: Receive data: {:?}", buf.len());
-
-        client_2.close().await;
-    });
-
-    let _ = task.await;
-    let _ = task2.await;
+    connection_pool.close().await;
 
     Ok(())
 }

@@ -1,59 +1,29 @@
-use burst_message_relay::{client::client::Client, config::ClientConfig};
+use std::error::Error;
+
+use burst_message_relay::client::{connection_pool::ConnectionPool, client::Client};
+use std::sync::Arc;
 
 #[tokio::main]
-pub async fn main() -> std::io::Result<()> {
-    let mut client = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client.connect().await;
+async fn main() -> Result<(), Box<dyn Error>> {
 
-    let queues = vec![0, 1];
-    let code = client.init_queues(&queues).await;
+    let connection_pool = Arc::new(ConnectionPool::new("127.0.0.1:8000", 1));
+    connection_pool.initialize_conns().await;
 
-    println!("Init code: {:?}", code);
+    let mut client = Client::new(connection_pool.clone());
 
-    let code = client.create_bc_group(String::from("0"), 2).await;
+    let code = client.create_bc_group("0", 1).await;
 
-    println!("Broadcast Code: {:?}", code);
+    println!("Server code: {:?}", code);
 
-    client.close().await;
+    let random_bytes = vec![1; 1024 * 1024];
 
-    let mut client_1 = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client_1.connect().await;
+    let code = client.broadcast_root("0", &random_bytes).await;
+    println!("Send Code: {:?}", code);
 
-    let mut client_2 = Client::new("127.0.0.1:8000", ClientConfig::default());
-    client_2.connect().await;
+    let buf = client.broadcast("0").await;
+    println!("Data: {:?}", buf.len());
 
-    let task = tokio::spawn(async move {
-
-        for _ in 0..15 {
-            let random_bytes = vec![1; 268435456 * 2];
-            let d: &[&[u8]] = &[&[1, 2, 3, 4], &random_bytes];
-
-            let code = client_1
-                .broadcast_root_refs(String::from("0"), &d)
-                .await;
-
-            println!("Thread 1: Broadcast_root code: {:?}", code);
-
-            let buf = client_1.broadcast(String::from("0")).await;
-
-            println!("Thread 1: Broadcast data: {:?}", buf.len());
-        }
-
-        client_1.close().await;
-    });
-
-    let task2 = tokio::spawn(async move {
-        for _ in 0..15 {
-            let buf = client_2.broadcast(String::from("0")).await;
-
-            println!("Thread 2: Broadcast data: {:?}", buf.len());
-        }
-
-        client_2.close().await;
-    });
-
-    let _ = task.await;
-    let _ = task2.await; 
+    connection_pool.close().await;
 
     Ok(())
 }
